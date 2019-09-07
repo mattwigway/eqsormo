@@ -17,6 +17,7 @@
 # Author: Matthew Wigginton Conway <matt@indicatrix.org>, School of Geographical Sciences and Urban Planning, Arizona State University
 
 import pandas as pd
+import numpy as np
 from sys import path, argv
 import os.path
 path.append(os.path.dirname(os.path.dirname(os.path.abspath(argv[0]))))
@@ -45,6 +46,7 @@ mod = eqsormo.SortingModel(
     sampleAlternatives=10
 )
 
+np.random.seed(2832)
 mod.fit()
 
 print(mod.summary())

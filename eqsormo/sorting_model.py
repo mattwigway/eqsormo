@@ -193,13 +193,16 @@ Convergence:
 
         self._prev_mean_indirect_utility = pd.Series(np.zeros(len(self.altCharacteristics)), index=self.altCharacteristics.index)
 
+        self.first_stage_loglik_constants = -self.first_stage_neg_loglikelihood(np.zeros(len(self.firstStageData.columns)))
+
         minResults = scipy.optimize.minimize(
             self.first_stage_neg_loglikelihood,
-            pd.Series(np.zeros(len(self.firstStageData.columns)), index=self.firstStageData.columns),
+            np.zeros(len(self.firstStageData.columns)),
             method=self.method,
             options={'disp': True}
         )
 
+        self.first_stage_loglik_beta = -self.first_stage_neg_loglikelihood(minResults.x)
         self.interaction_params = pd.Series(minResults.x, self.firstStageData.columns)
         self.interaction_params_se = pd.Series(np.sqrt(np.diag(minResults.hess_inv)), self.firstStageData.columns)
         self.mean_indirect_utility = self.compute_mean_indirect_utility(self.interaction_params)
