@@ -1,0 +1,199 @@
+#    Copyright 2019 Matthew Wigginton Conway
+
+#    Licensed under the Apache License, Version 2.0 (the "License");
+#    you may not use this file except in compliance with the License.
+#    You may obtain a copy of the License at
+
+#        http://www.apache.org/licenses/LICENSE-2.0
+
+#    Unless required by applicable law or agreed to in writing, software
+#    distributed under the License is distributed on an "AS IS" BASIS,
+#    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#    See the License for the specific language governing permissions and
+#    limitations under the License.
+
+# Author: Matthew Wigginton Conway <matt@indicatrix.org>, School of Geographical Sciences and Urban Planning, Arizona State University
+
+from logging import getLogger
+import time
+import statsmodels.api as sm
+import pandas as pd
+import numpy as np
+import scipy.optimize, scipy.stats
+
+LOG = getLogger(__name__)
+
+class SortingModel(object):
+    """
+    Represents a random utility based equilibrium sorting model.
+
+    Based on the model described in Klaiber and Phaneuf (2010) "Valuing open space in a residential sorting model of the Twin Cities"
+    https://doi.org/10.1016/j.jeem.2010.05.002 (no open access version available, unfortunately)
+    """
+
+    def __init__ (self, altHousing, altNeighborhood, altPrice, altHedonic, hh, hhChoice, interactions, initialPriceCoef, sampleAlternatives=None, method='bfgs'):
+        """
+        :param altHousing: Home attributes of housing alternatives/types (assumed that all alternatives are available to all households)
+        :type altHousing: Pandas dataframe
+
+        :param altNeighborhood: Exogenous neighborhood attributes of housing alternatives (endogenous neighborhood attributes not yet supported). Column names must be different from those in altHousing.
+        :type altNeighborhood: Pandas dataframe, indexed like altHousing
+        
+        :param altPrice: Equilibrium (non-instrumented) price of housing alternatives (will be replaced with instrumented version)
+        :type altPrice: Pandas series of float64, indexed like altHousing and altNeighborhood
+
+        :param altHedonic: Attributes of alternatives to be used in hedonic estimation (i.e. instrumenting for price). Will likely be a superset of altHousing and altNeighborhood, with some other attributes about nearby neighborhoods
+        :type altHedonic: Pandas dataframe, indexed like altHousing, altNeighborhood, and altPrice
+
+        :param hh: Attributes of households
+        :type hh: Pandas dataframe
+
+        :param hhChoice: Alternative actually chosen by households
+        :type hhChoice: Pandas series, indexed like hh, with values matching index of altHousing et al.
+
+        :param interactions: Which sociodemographics should be interacted with which housing or neighborhood attributes.
+        :type interactions: iterable of tuple (sociodemographic column, housing/neighborhood column)
+
+        :param initialPriceCoef: For the 2SLS estimate, an initial estimate for the price coefficient is needed; this value is iterated from and should converge.
+        :type intialPriceCoef: float
+
+        :param sampleAlternatives: If a positive integer, take a random sample of this size for available alternatives to estimate the model. Recommended in models with a large number of alternatives. If 0 or None, no sampling will be performed. Use np.set_seed() before calling fit for model reproducibility when using this option.
+        :type sampleAlternatives: int or None
+        """
+
+        # Protective copies of all the things
+        self.altHousing = altHousing.copy()
+        self.altNeighborhood = altNeighborhood.copy()
+        self.origPrice = altPrice.copy()
+        self.altHedonic = altHedonic.copy()
+        self.hh = hh.copy()
+        self.hhChoice = hhChoice.copy()
+        self.interactions = interactions
+        self.initialPriceCoef = initialPriceCoef
+        self.sampleAlternatives = sampleAlternatives
+
+        #: supply by housing type
+        self.supply = self.hhChoice.groupby().size().astype('float64')
+
+        self.validate()
+
+        self.altCharacteristics = self.altHousing.merge(self.altNeighborhood)
+        assert not 'price' in self.altCharacteristics.columns
+        self.altCharacteristics['price'] = altPrice
+        self.method = method
+
+    def validate (self):
+        "Check for obvious errors in model inputs"
+        LOG.warn('Validation function not implemented. You better be darn sure of your inputs.')
+
+    def fit (self):
+        'Fit the whole model'
+        startTime = time.clock()
+        LOG.info('Fitting equilibrium sorting model')
+
+        self.create_alternatives()
+
+        self.fit_first_stage()
+
+        endTime = time.clock()
+        LOG.info(f'''
+Fitting sorting model took {endTime - startTime:.3f} seconds.
+Convergence:
+  First stage: {self.first_stage_convergence}
+''')
+    def create_alternatives (self):
+        LOG.info('Creating alternatives')
+        startTime = time.clock()
+
+        alts = []
+        for hhidx in self.hh.index:
+            if self.sampleAlternatives <= 0 or self.sampleAlternatives is None:
+                alts.append(self.altCharacteristics.copy())
+            else:
+                # TODO with or without replacement? Default without.
+                sample = self.sampleAlternatives[self.sampleAlternatives.index != self.hhChoice.loc[hhidx]].sample(self.sampleAlternatives - 1)
+                alts.append(pd.concat([
+                    sample,
+                    self.sampleAlternatives.loc[[self.hhChoice.loc[hhidx]]]
+                ]))
+        
+        self.alternatives = pd.concat(alts, keys=self.hh.index)
+
+        endTime = time.clock()
+        LOG.info(f'Created {len(self.alternatives)} alternatives for {len(self.hh)} in {endTime - startTime:.3f} seconds')
+
+    def first_stage_utility (self, params, mean_indirect_utility):
+        # TODO I don't think that adding the mean_indirect_utility this way will work from an indexing standpoint
+        return self.firstStageData.apply(lambda row: row * params, 1).apply(np.sum)
+
+    def first_stage_probabilities (self, params, mean_indirect_utility):
+        expUtility = np.exp(self.first_stage_utility(params, mean_indirect_utility))
+        return expUtility / expUtility.groupby(level=0).sum()
+
+    def compute_mean_indirect_utility (self, params):
+        # These are the alternative specific constants, which are not fit by ML, but rather using a contraction mapping that lets
+        # the model converge faster - see Equation 16 of Bayer et al. (2004).
+        # TODO better starting values for this?
+        LOG.info('Computing mean indirect utilities (ASCs)')
+        mean_indirect_utility = pd.Series(np.zeros(len(self.altCharacteristics)), index=self.altCharacteristics.index)
+        startTime = time.clock()
+        probs = self.first_stage_probabilities(params, mean_indirect_utility).groupby(level=1).sum() # group by housing types
+        iter = 0
+        while True:
+            iter += 1
+            mean_indirect_utility = self.mean_indirect_utility - np.log(np.sum(probs / self.supply))
+            if np.max(np.abs(probs - self.supply)) < 1e-3:
+                break
+        
+        endTime = time.clock()
+        LOG.info(f'Computed {len(mean_indirect_utility)} mean indirect utilities in {endTime-startTime:.3f}s using {iter} iterations')
+
+        return mean_indirect_utility
+
+    def first_stage_likelihood (self, params):
+        mean_indirect_utility = self.compute_mean_indirect_utility()
+        probs = self.first_stage_probabilities(params, mean_indirect_utility)
+        return np.sum(probs.loc[list(zip(self.hhChoice.index, self.hhChoice))])
+
+    def fit_first_stage (self):
+        'Perform the first stage estimation'
+        LOG.info('Performing first-stage estimation')
+
+        startTime = time.clock()
+
+        self.firstStageData = pd.DataFrame()
+
+        # demean sociodemographics so ASCs are interpretable as mean indirect utility (or something like that... TODO check)
+        demeanedHh = self.hh.apply(lambda col: col - col.mean())
+        altsWithHhCharacteristics = self.alternatives.merge(demeanedHh) # should project to all alternatives
+
+        for interaction in self.interactions:
+            self.firstStageData[f'{interaction[0]}_{interaction[1]}'] = altsWithHhCharacteristics[interaction[0]] * altsWithHhCharacteristics[interaction[1]]
+        
+        LOG.info(f'Fitting {len(self.firstStageData.columns)} interaction parameters')
+
+        minResults = scipy.optimize.minimize(
+            self.first_stage_likelihood,
+            pd.Series(np.zeros(len(self.firstStageData.columns)), index=self.firstStageData.columns),
+            method=self.method
+        )
+
+        self.interaction_params = minResults.x
+        self.interaction_params_se = np.diag(minResults.hess_inv)
+        self.mean_indirect_utility = self.compute_mean_indirect_utility(self.interaction_params)
+        self.first_stage_converged = minResults.success
+
+        endTime = time.clock()
+        if self.first_stage_converged:
+            LOG.info(f'First stage converged in {endTime - startTime:.3f} seconds: {minResults.status}')
+
+    def summary (self):
+        # summarize params
+        summary = pd.DataFrame({
+            'coef': self.interaction_params,
+            'se': self.interaction_params_se
+        })
+
+        summary['z'] = summary.coef / summary.se
+        summary['p'] = (1 - scipy.stats.norm.cdf(np.abs(summary.z))) * 2
+        return summary
