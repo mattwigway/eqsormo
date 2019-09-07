@@ -20,6 +20,7 @@ import statsmodels.api as sm
 import pandas as pd
 import numpy as np
 import scipy.optimize, scipy.stats
+from tqdm import tqdm
 
 LOG = getLogger(__name__)
 
@@ -59,6 +60,8 @@ class SortingModel(object):
 
         :param sampleAlternatives: If a positive integer, take a random sample of this size for available alternatives to estimate the model. Recommended in models with a large number of alternatives. If 0 or None, no sampling will be performed. Use np.set_seed() before calling fit for model reproducibility when using this option.
         :type sampleAlternatives: int or None
+
+        :param method: A scipy.optimize.minimize method used for maximizing log-likelihood of first stage, default 'bfgs'
         """
 
         # Protective copies of all the things
@@ -73,11 +76,11 @@ class SortingModel(object):
         self.sampleAlternatives = sampleAlternatives
 
         #: supply by housing type
-        self.supply = self.hhChoice.groupby().size().astype('float64')
+        self.supply = self.hhChoice.value_counts().astype('float64')
 
         self.validate()
 
-        self.altCharacteristics = self.altHousing.merge(self.altNeighborhood)
+        self.altCharacteristics = self.altHousing.join(self.altNeighborhood)
         assert not 'price' in self.altCharacteristics.columns
         self.altCharacteristics['price'] = altPrice
         self.method = method
@@ -99,35 +102,41 @@ class SortingModel(object):
         LOG.info(f'''
 Fitting sorting model took {endTime - startTime:.3f} seconds.
 Convergence:
-  First stage: {self.first_stage_convergence}
+  First stage: {self.first_stage_converged}
 ''')
     def create_alternatives (self):
         LOG.info('Creating alternatives')
         startTime = time.clock()
 
         alts = []
-        for hhidx in self.hh.index:
+        # I wonder if there's a way to do this without a loop, this takes forever
+        for hhidx in tqdm(self.hh.index):
             if self.sampleAlternatives <= 0 or self.sampleAlternatives is None:
                 alts.append(self.altCharacteristics.copy())
             else:
                 # TODO with or without replacement? Default without.
-                sample = self.sampleAlternatives[self.sampleAlternatives.index != self.hhChoice.loc[hhidx]].sample(self.sampleAlternatives - 1)
+                sample = self.altCharacteristics[self.altCharacteristics.index != self.hhChoice.loc[hhidx]].sample(self.sampleAlternatives - 1)
                 alts.append(pd.concat([
                     sample,
-                    self.sampleAlternatives.loc[[self.hhChoice.loc[hhidx]]]
+                    self.altCharacteristics.loc[[self.hhChoice.loc[hhidx]]]
                 ]))
         
         self.alternatives = pd.concat(alts, keys=self.hh.index)
+        self.alternatives.index.names = ['household', 'choice']
 
         endTime = time.clock()
         LOG.info(f'Created {len(self.alternatives)} alternatives for {len(self.hh)} in {endTime - startTime:.3f} seconds')
 
     def first_stage_utility (self, params, mean_indirect_utility):
         # TODO I don't think that adding the mean_indirect_utility this way will work from an indexing standpoint
-        return self.firstStageData.apply(lambda row: row * params, 1).apply(np.sum)
+        # diffs is differences due to sociodemographics from mean indirect utility
+        diffs = self.firstStageData.multiply(params, axis='columns').sum(axis='columns')
+        return diffs + mean_indirect_utility.loc[self.firstStageData.index.get_level_values('choice')].values
 
     def first_stage_probabilities (self, params, mean_indirect_utility):
         expUtility = np.exp(self.first_stage_utility(params, mean_indirect_utility))
+        if not np.all(np.isfinite(expUtility)):
+            raise ValueError(f'Household/choice combinations {expUtility.index[~np.isfinite(expUtility)]} have non-finite utilities!')
         return expUtility / expUtility.groupby(level=0).sum()
 
     def compute_mean_indirect_utility (self, params):
@@ -135,25 +144,31 @@ Convergence:
         # the model converge faster - see Equation 16 of Bayer et al. (2004).
         # TODO better starting values for this?
         LOG.info('Computing mean indirect utilities (ASCs)')
-        mean_indirect_utility = pd.Series(np.zeros(len(self.altCharacteristics)), index=self.altCharacteristics.index)
         startTime = time.clock()
+        mean_indirect_utility = self._prev_mean_indirect_utility
         probs = self.first_stage_probabilities(params, mean_indirect_utility).groupby(level=1).sum() # group by housing types
+        # optimization: save starting values (makes it converge faster next time)
         iter = 0
         while True:
             iter += 1
-            mean_indirect_utility = self.mean_indirect_utility - np.log(np.sum(probs / self.supply))
-            if np.max(np.abs(probs - self.supply)) < 1e-3:
+            mean_indirect_utility = mean_indirect_utility - np.log(probs / self.supply)
+            probs = self.first_stage_probabilities(params, mean_indirect_utility).groupby(level=1).sum() # group by housing types
+            # TODO hardcoded tolerances below are bad
+            if np.abs(probs.sum() - self.supply.sum()) > 1e-3:
+                raise ValueError('Total demand does not equal total supply! This may be a scaling issue.')
+            if np.max(np.abs(probs - self.supply)) < 1e-6:
                 break
         
         endTime = time.clock()
         LOG.info(f'Computed {len(mean_indirect_utility)} mean indirect utilities in {endTime-startTime:.3f}s using {iter} iterations')
 
+        self._prev_mean_indirect_utility = mean_indirect_utility
         return mean_indirect_utility
 
-    def first_stage_likelihood (self, params):
-        mean_indirect_utility = self.compute_mean_indirect_utility()
-        probs = self.first_stage_probabilities(params, mean_indirect_utility)
-        return np.sum(probs.loc[list(zip(self.hhChoice.index, self.hhChoice))])
+    def first_stage_neg_loglikelihood (self, params):
+        mean_indirect_utility = self.compute_mean_indirect_utility(params)
+        logprobs = np.log(self.first_stage_probabilities(params, mean_indirect_utility))
+        return -np.sum(logprobs.loc[list(zip(self.hhChoice.index, self.hhChoice))])
 
     def fit_first_stage (self):
         'Perform the first stage estimation'
@@ -165,27 +180,36 @@ Convergence:
 
         # demean sociodemographics so ASCs are interpretable as mean indirect utility (or something like that... TODO check)
         demeanedHh = self.hh.apply(lambda col: col - col.mean())
-        altsWithHhCharacteristics = self.alternatives.merge(demeanedHh) # should project to all alternatives
+        demeanedHh.index.name = 'household'
+        altsWithHhCharacteristics = self.alternatives.join(demeanedHh, ) # should project to all alternatives
 
         for interaction in self.interactions:
-            self.firstStageData[f'{interaction[0]}_{interaction[1]}'] = altsWithHhCharacteristics[interaction[0]] * altsWithHhCharacteristics[interaction[1]]
+            self.firstStageData[f'{interaction[0]}_{interaction[1]}'] =\
+                 altsWithHhCharacteristics[interaction[0]] * altsWithHhCharacteristics[interaction[1]]
+            # solve scaling issues
+            self.firstStageData[f'{interaction[0]}_{interaction[1]}'] /= self.firstStageData[f'{interaction[0]}_{interaction[1]}'].std()
         
         LOG.info(f'Fitting {len(self.firstStageData.columns)} interaction parameters')
 
+        self._prev_mean_indirect_utility = pd.Series(np.zeros(len(self.altCharacteristics)), index=self.altCharacteristics.index)
+
         minResults = scipy.optimize.minimize(
-            self.first_stage_likelihood,
+            self.first_stage_neg_loglikelihood,
             pd.Series(np.zeros(len(self.firstStageData.columns)), index=self.firstStageData.columns),
-            method=self.method
+            method=self.method,
+            options={'disp': True}
         )
 
-        self.interaction_params = minResults.x
-        self.interaction_params_se = np.diag(minResults.hess_inv)
+        self.interaction_params = pd.Series(minResults.x, self.firstStageData.columns)
+        self.interaction_params_se = pd.Series(np.sqrt(np.diag(minResults.hess_inv)), self.firstStageData.columns)
         self.mean_indirect_utility = self.compute_mean_indirect_utility(self.interaction_params)
         self.first_stage_converged = minResults.success
 
         endTime = time.clock()
         if self.first_stage_converged:
             LOG.info(f'First stage converged in {endTime - startTime:.3f} seconds: {minResults.status}')
+        else:
+            LOG.error(f'First stage FAILED TO CONVERGE in {endTime - startTime:.3f} seconds: {minResults.status}')
 
     def summary (self):
         # summarize params
@@ -195,5 +219,6 @@ Convergence:
         })
 
         summary['z'] = summary.coef / summary.se
+        # TODO should probably be t-test, but then I have to do a bunch of df calculations...
         summary['p'] = (1 - scipy.stats.norm.cdf(np.abs(summary.z))) * 2
         return summary
