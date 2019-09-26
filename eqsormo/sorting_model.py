@@ -93,11 +93,9 @@ class SortingModel(object):
         'Fit the whole model'
         startTime = time.clock()
         LOG.info('Fitting equilibrium sorting model')
-
         self.create_alternatives()
-
         self.fit_first_stage()
-
+        self.fit_second_stage()
         endTime = time.clock()
         LOG.info(f'''
 Fitting sorting model took {endTime - startTime:.3f} seconds.
@@ -187,7 +185,8 @@ Convergence:
             self.firstStageData[f'{interaction[0]}_{interaction[1]}'] =\
                  altsWithHhCharacteristics[interaction[0]] * altsWithHhCharacteristics[interaction[1]]
             # solve scaling issues
-            self.firstStageData[f'{interaction[0]}_{interaction[1]}'] /= self.firstStageData[f'{interaction[0]}_{interaction[1]}'].std()
+            stdevs = self.firstStageData.apply(np.std)
+            self.firstStageData = self.firstStageData.divide(stdevs, axis='columns')
         
         LOG.info(f'Fitting {len(self.firstStageData.columns)} interaction parameters')
 
@@ -203,8 +202,8 @@ Convergence:
         )
 
         self.first_stage_loglik_beta = -self.first_stage_neg_loglikelihood(minResults.x)
-        self.interaction_params = pd.Series(minResults.x, self.firstStageData.columns)
-        self.interaction_params_se = pd.Series(np.sqrt(np.diag(minResults.hess_inv)), self.firstStageData.columns)
+        self.interaction_params = pd.Series(minResults.x, self.firstStageData.columns) * stdevs
+        self.interaction_params_se = pd.Series(np.sqrt(np.diag(minResults.hess_inv)), self.firstStageData.columns) * stdevs
         self.mean_indirect_utility = self.compute_mean_indirect_utility(self.interaction_params)
         self.first_stage_converged = minResults.success
 
@@ -214,11 +213,61 @@ Convergence:
         else:
             LOG.error(f'First stage FAILED TO CONVERGE in {endTime - startTime:.3f} seconds: {minResults.status}')
 
+    def fit_second_stage (self):
+        'Fit the instrumental variables portion of the model'
+        LOG.info('Fitting second stage')
+
+        startTime = time.clock()
+
+        priceCoef = prevPriceCoef = self.initialPriceCoef
+
+        altsWithPrice = self.altHousing.join(self.altNeighborhood)
+
+        iter = 0
+        while True:
+            residual_utility = self.mean_indirect_utility - priceCoef * self.origPrice
+            # TODO should there be a constant? There isn't one in the paper. I guess that would make for two shock terms which we don't
+            # want
+            # Klaiber and Phaneuf (2010) don't include a constant, and it may not be needed, but Klaiber and Kuminoff (2014) note that
+            # it is if the mean indirect utilities are normalized. Ours aren't but we may still need it (TODO)
+            # TODO is the estimate for the constant always zero?
+            ivreg = sm.OLS(residual_utility, sm.add_constant(self.altCharacteristics))
+            ivfit = ivreg.fit()
+
+            # compute the price instrument
+            # TODO: both Klaiber and Phaneuf and Klaiber and Kuminoff say to "solve for the prices that clear the market"
+            # but don't provide details. It seems that to clear the market, we need to get the predicted mean indirect utilities
+            # to exactly equal the mean indirect utilities from stage 1, by adjusting prices. The xis will still be non-zero because
+            # when we estimate the final regression we don't include shocks from neighboring neighborhoods, but I'm not sure why those
+            # are called unobservable shocks because we literally observed them and then took them out. It seems like this algebra below
+            # is integrating the unobservable part into the prices?
+            ivPrice = (self.mean_indirect_utility - ivfit.fittedvalues) / priceCoef
+
+            # TODO Do I do something special here since I have an instrumental variable, or is just plain OLS okay?
+            altsWithPrice['price_iv'] = ivPrice
+            secondStageReg = sm.OLS(self.mean_indirect_utility, sm.add_constant(altsWithPrice))
+            secondStageFit = secondStageReg.fit()
+
+            priceCoef = secondStageFit.params.price_iv
+            LOG.info(f'Second stage iteration ({iter}): price coefficient {priceCoef}')
+            iter += 1
+
+            if np.abs(priceCoef - prevPriceCoef) < 1e-6:
+                endTime = time.clock()
+                LOG.info(f'Price coefficient converged in {endTime-startTime:.3f} seconds after {iter} iterations')
+                self.mean_params = secondStageFit.params
+                self.mean_params_se = secondStageFit.bse
+                self.type_shock = secondStageFit.resid
+                self.price_iv = ivPrice
+                break
+            else:
+                prevPriceCoef = priceCoef
+
     def summary (self):
         # summarize params
         summary = pd.DataFrame({
-            'coef': self.interaction_params,
-            'se': self.interaction_params_se
+            'coef': pd.concat([self.interaction_params, self.mean_params]),
+            'se': pd.concat([self.interaction_params_se, self.mean_params_se])
         })
 
         summary['z'] = summary.coef / summary.se
