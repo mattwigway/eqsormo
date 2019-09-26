@@ -17,6 +17,8 @@ from .sorting_model import SortingModel
 
 version = '0.0.1'
 
+rootLogger = None
+
 def enable_logging ():
     '''
     Enable logging for the EqSorMo package.
@@ -25,9 +27,12 @@ def enable_logging ():
     function. Otherwise, running this function will create a root logger and enable logging to the console.
     '''
 
-    rootLogger = logging.getLogger()
-    rootLogger.setLevel(logging.INFO)
-    rootLogger.addHandler(logging.StreamHandler())
+    if rootLogger is None:
+        rootLogger = logging.getLogger()
+        rootLogger.setLevel(logging.INFO)
+        rootLogger.addHandler(logging.StreamHandler())
 
-    rootLogger.info(f'EqSorMo version {version}')
+        rootLogger.info(f'EqSorMo version {version}')
+    else:
+        rootLogger.info('Logging already enabled.')
 
