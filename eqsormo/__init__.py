@@ -26,13 +26,14 @@ def enable_logging ():
     EqSorMo uses the Python logging package. If you are managing loggers at a higher level in a large project, you may not want to run this
     function. Otherwise, running this function will create a root logger and enable logging to the console.
     '''
+    global rootLogger
 
     if rootLogger is None:
         rootLogger = logging.getLogger()
         rootLogger.setLevel(logging.INFO)
         rootLogger.addHandler(logging.StreamHandler())
 
-        rootLogger.info(f'EqSorMo version {version}')
+        rootLogger.info(f'Eqsormo version {version}')
     else:
         rootLogger.info('Logging already enabled.')
 

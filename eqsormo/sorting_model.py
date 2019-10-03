@@ -69,7 +69,8 @@ class SortingModel(object):
         self.altNeighborhood = altNeighborhood.copy()
         self.origPrice = altPrice.copy()
         self.altHedonic = altHedonic.copy()
-        self.hh = hh.copy()
+        self.hh = hh.copy().apply(lambda col: col - col.mean()) # predemean household characteristics
+        self.hh.index.name = 'household' # for joining convenience later
         self.hhChoice = hhChoice.copy()
         self.interactions = interactions
         self.initialPriceCoef = initialPriceCoef
@@ -85,6 +86,8 @@ class SortingModel(object):
         self.altCharacteristics['price'] = altPrice
         self.method = method
 
+        self.MARKET_CLEARING_TOLERANCE = 1e-2 # how far from the true supply can the market share be (in this case, within 0.01 units)
+
     def validate (self):
         "Check for obvious errors in model inputs"
         LOG.warn('Validation function not implemented. You better be darn sure of your inputs.')
@@ -93,7 +96,9 @@ class SortingModel(object):
         'Fit the whole model'
         startTime = time.clock()
         LOG.info('Fitting equilibrium sorting model')
-        self.create_alternatives()
+        if self.alternatives is None:
+            raise RuntimeError('Alternatives not yet created')
+
         self.fit_first_stage()
         self.fit_second_stage()
         endTime = time.clock()
@@ -106,21 +111,22 @@ Convergence:
         LOG.info('Creating alternatives')
         startTime = time.clock()
 
-        alts = []
-        # I wonder if there's a way to do this without a loop, this takes forever
-        for hhidx in tqdm(self.hh.index):
-            if self.sampleAlternatives <= 0 or self.sampleAlternatives is None:
-                alts.append(self.altCharacteristics.copy())
-            else:
-                # TODO with or without replacement? Default without.
-                sample = self.altCharacteristics[self.altCharacteristics.index != self.hhChoice.loc[hhidx]].sample(self.sampleAlternatives - 1)
-                alts.append(pd.concat([
-                    sample,
-                    self.altCharacteristics.loc[[self.hhChoice.loc[hhidx]]]
-                ]))
-        
-        self.alternatives = pd.concat(alts, keys=self.hh.index)
-        self.alternatives.index.names = ['household', 'choice']
+        self.fullAlternatives = pd.concat([self.altCharacteristics for i in range(len(self.hh))], keys=self.hh.index)
+        self.fullAlternatives['chosen'] = False
+        self.fullAlternatives['hhchoice'] = self.hhChoice.reindex(self.fullAlternatives.index, level=0)
+        self.fullAlternatives.loc[self.fullAlternatives.index.get_level_values(1) == self.fullAlternatives.hhchoice, 'chosen'] = True
+
+        LOG.info('created full set of alternatives, now sampling if requested')
+
+        if self.sampleAlternatives <= 0 or self.sampleAlternatives is None:
+            self.alternatives = self.fullAlternatives
+        else:
+            unchosenAlternatives = self.fullAlternatives[~self.fullAlternatives.chosen].groupby(level=0).apply(lambda x: x.sample(self.sampleAlternatives - 1))
+            unchosenAlternatives.index = unchosenAlternatives.index.droplevel(0) # fix dup'd household level due to groupby
+            self.alternatives = pd.concat([unchosenAlternatives, self.fullAlternatives[self.fullAlternatives.chosen]]).sort_index(level=[0, 1])
+
+        self.alternatives.drop(columns=['chosen'], inplace=True)
+        self.fullAlternatives.drop(columns=['chosen'], inplace=True)
 
         endTime = time.clock()
         LOG.info(f'Created {len(self.alternatives)} alternatives for {len(self.hh)} in {endTime - startTime:.3f} seconds')
@@ -141,7 +147,7 @@ Convergence:
         # These are the alternative specific constants, which are not fit by ML, but rather using a contraction mapping that lets
         # the model converge faster - see Equation 16 of Bayer et al. (2004).
         # TODO better starting values for this?
-        LOG.info('Computing mean indirect utilities (ASCs)')
+        LOG.debug('Computing mean indirect utilities (ASCs)')
         startTime = time.clock()
         mean_indirect_utility = self._prev_mean_indirect_utility
         probs = self.first_stage_probabilities(params, mean_indirect_utility).groupby(level=1).sum() # group by housing types
@@ -158,7 +164,7 @@ Convergence:
                 break
         
         endTime = time.clock()
-        LOG.info(f'Computed {len(mean_indirect_utility)} mean indirect utilities in {endTime-startTime:.3f}s using {iter} iterations')
+        LOG.debug(f'Computed {len(mean_indirect_utility)} mean indirect utilities in {endTime-startTime:.3f}s using {iter} iterations')
 
         self._prev_mean_indirect_utility = mean_indirect_utility
         return mean_indirect_utility
@@ -177,9 +183,7 @@ Convergence:
         self.firstStageData = pd.DataFrame()
 
         # demean sociodemographics so ASCs are interpretable as mean indirect utility (or something like that... TODO check)
-        demeanedHh = self.hh.apply(lambda col: col - col.mean())
-        demeanedHh.index.name = 'household'
-        altsWithHhCharacteristics = self.alternatives.join(demeanedHh, ) # should project to all alternatives
+        altsWithHhCharacteristics = self.alternatives.join(self.hh) # should project to all alternatives TODO check
 
         for interaction in self.interactions:
             self.firstStageData[f'{interaction[0]}_{interaction[1]}'] =\
@@ -202,8 +206,9 @@ Convergence:
         )
 
         self.first_stage_loglik_beta = -self.first_stage_neg_loglikelihood(minResults.x)
-        self.interaction_params = pd.Series(minResults.x, self.firstStageData.columns) * stdevs
+        self.interaction_params = pd.Series(minResults.x, self.firstStageData.columns) * stdevs # correct the scaling
         self.interaction_params_se = pd.Series(np.sqrt(np.diag(minResults.hess_inv)), self.firstStageData.columns) * stdevs
+        # TODO robust SEs
         self.mean_indirect_utility = self.compute_mean_indirect_utility(self.interaction_params)
         self.first_stage_converged = minResults.success
 
@@ -249,15 +254,15 @@ Convergence:
             secondStageFit = secondStageReg.fit()
 
             priceCoef = secondStageFit.params.price_iv
-            LOG.info(f'Second stage iteration ({iter}): price coefficient {priceCoef}')
+            LOG.debug(f'Second stage iteration ({iter}): price coefficient {priceCoef}')
             iter += 1
 
             if np.abs(priceCoef - prevPriceCoef) < 1e-6:
                 endTime = time.clock()
                 LOG.info(f'Price coefficient converged in {endTime-startTime:.3f} seconds after {iter} iterations')
-                self.mean_params = secondStageFit.params
+                self.mean_params = secondStageFit.params[(i for i in secondStageFit.params.index if i != 'const')]
                 self.mean_params_se = secondStageFit.bse
-                self.type_shock = secondStageFit.resid
+                self.type_shock = secondStageFit.resid + secondStageFit.params.const
                 self.price_iv = ivPrice
                 break
             else:
@@ -274,3 +279,52 @@ Convergence:
         # TODO should probably be t-test, but then I have to do a bunch of df calculations...
         summary['p'] = (1 - scipy.stats.norm.cdf(np.abs(summary.z))) * 2
         return summary
+
+    def probabilities (self):
+        "Get probabilities of every household choosing every house type"
+        fullAlternativesWithInteractions = self.fullAlternatives.join(self.hh)
+
+        for left, right in self.interactions:
+            fullAlternativesWithInteractions[f'{left}_{right}'] = fullAlternativesWithInteractions[left] * fullAlternativesWithInteractions[right]
+
+        fullAlternativesWithInteractions['price_iv'] = self.price_iv.reindex(fullAlternativesWithInteractions.index, level=1)
+
+        # compute utilities, without unobserved price shocks
+        params = pd.concat([self.mean_params, self.interaction_params])
+        utilities = fullAlternativesWithInteractions[params.index].multiply(params, 'columns').sum(axis='columns')
+        utilities += self.type_shock.reindex(fullAlternativesWithInteractions.index, level=1)
+
+        expUtilities = np.exp(utilities)
+        logsums = expUtilities.groupby(level=0).sum() # group by households and sum
+        probabilities = expUtilities / logsums.reindex(expUtilities.index, level=0)
+        return probabilities
+
+    def market_shares (self):
+        return self.probabilities().groupby(level=1).sum()
+
+    def clear_market (self):
+        'Adjust prices so the market clears'
+        origPrices = self.price_iv # for comparison later
+
+        LOG.info('Clearing the market (everyone stand back)')
+
+        mktShares = self.market_shares()
+        iters = 0
+        with tqdm() as pbar:
+            while np.max(np.abs(mktShares - self.supply)) > self.MARKET_CLEARING_TOLERANCE:
+                self.price_iv *= (((mktShares / self.supply) - 1) * -self.mean_params.price_iv) + 1
+                mktShares = self.market_shares()
+                iters += 1
+                pbar.update(1)
+                pbar.set_description(f'max abs diff: {np.max(np.abs(mktShares - self.supply)):.3f} units')
+
+        maxPriceChange = np.max(np.abs(self.price_iv - origPrices))
+        LOG.info(f'Market cleared after {iters} iterations, with absolute price changes of up to {maxPriceChange}')
+
+
+
+
+
+
+
+

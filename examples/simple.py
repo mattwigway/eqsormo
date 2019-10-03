@@ -33,7 +33,7 @@ alt['nbhd_median_income'] /= 1000
 mod = eqsormo.SortingModel(
     altHousing=alt[[]], # no structure specific attributes
     altNeighborhood=alt[['nbhd_median_income', 'nbhd_mean_hhsize']],
-    altHedonic=alt[['nbhd_median_income', 'nbhd_mean_hhsize', 'singleFamily']],
+    altHedonic=alt[['nbhd_median_income', 'nbhd_mean_hhsize', 'singleFamily', 'nearby_median_income', 'nearby_mean_hhsize']],
     altPrice=alt.rentgrs,
     hh = hh[['hhincome', 'college', 'numprec']],
     hhChoice=hh.choice,
@@ -47,6 +47,8 @@ mod = eqsormo.SortingModel(
 )
 
 np.random.seed(2832)
+mod.create_alternatives()
 mod.fit()
 
 print(mod.summary())
+print(mod.market_)
