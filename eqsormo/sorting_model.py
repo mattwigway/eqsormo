@@ -33,19 +33,13 @@ class SortingModel(object):
     https://doi.org/10.1016/j.jeem.2010.05.002 (no open access version available, unfortunately)
     """
 
-    def __init__ (self, altHousing, altNeighborhood, altPrice, altHedonic, hh, hhChoice, interactions, initialPriceCoef, sampleAlternatives=None, method='bfgs'):
+    def __init__ (self, altCharacteristics, altPrice, hh, hhChoice, interactions, initialPriceCoef, sampleAlternatives=None, method='bfgs'):
         """
-        :param altHousing: Home attributes of housing alternatives/types (assumed that all alternatives are available to all households)
+        :param altCharacteristics: Home and neighborhood attributes of housing alternatives/types (assumed that all alternatives are available to all households)
         :type altHousing: Pandas dataframe
-
-        :param altNeighborhood: Exogenous neighborhood attributes of housing alternatives (endogenous neighborhood attributes not yet supported). Column names must be different from those in altHousing.
-        :type altNeighborhood: Pandas dataframe, indexed like altHousing
         
         :param altPrice: Equilibrium (non-instrumented) price of housing alternatives (will be replaced with instrumented version)
         :type altPrice: Pandas series of float64, indexed like altHousing and altNeighborhood
-
-        :param altHedonic: Attributes of alternatives to be used in hedonic estimation (i.e. instrumenting for price). Will likely be a superset of altHousing and altNeighborhood, with some other attributes about nearby neighborhoods
-        :type altHedonic: Pandas dataframe, indexed like altHousing, altNeighborhood, and altPrice
 
         :param hh: Attributes of households
         :type hh: Pandas dataframe
@@ -66,10 +60,8 @@ class SortingModel(object):
         """
 
         # Protective copies of all the things
-        self.altHousing = altHousing.copy()
-        self.altNeighborhood = altNeighborhood.copy()
+        self.altCharacteristics = altCharacteristics.astype('float64').copy()
         self.price = altPrice.copy()
-        self.altHedonic = altHedonic.copy()
         self.hh = hh.copy().apply(lambda col: col - col.mean()) # predemean household characteristics
         self.hh.index.name = 'household' # for joining convenience later
         self.hhChoice = hhChoice.copy()
@@ -82,9 +74,7 @@ class SortingModel(object):
 
         self.validate()
 
-        self.altCharacteristics = self.altHousing.join(self.altNeighborhood)
         assert not 'price' in self.altCharacteristics.columns
-        self.altCharacteristics['price'] = altPrice
         self.method = method
 
         self.MARKET_CLEARING_TOLERANCE = 1e-2 # how far from the true supply can the market share be (in this case, within 0.01 units)
@@ -108,6 +98,7 @@ Fitting sorting model took {endTime - startTime:.3f} seconds.
 Convergence:
   First stage: {self.first_stage_converged}
 ''')
+
     def create_alternatives (self):
         LOG.info('Creating alternatives')
         startTime = time.clock()
@@ -192,8 +183,8 @@ Convergence:
         for interaction in self.interactions:
             self.firstStageData[f'{interaction[0]}_{interaction[1]}'] =\
                  altsWithHhCharacteristics[interaction[0]] * altsWithHhCharacteristics[interaction[1]]
-            # solve scaling issues
 
+        # solve scaling issues
         stdevs = self.firstStageData.apply(np.std)
         self.firstStageData = self.firstStageData.divide(stdevs, axis='columns')
         
@@ -231,32 +222,31 @@ Convergence:
 
         priceCoef = prevPriceCoef = self.initialPriceCoef
 
-        alts = self.altHousing.join(self.altNeighborhood)
-
         iter = 0
         with tqdm() as pbar:
             while True:
                 residual_utility = self.mean_indirect_utility - priceCoef * self.price
                 # Constant should be included since location of ASCs is arbitrary, see Klaiber and Kuminoff (2014) note 9
-                olsreg = sm.OLS(residual_utility, sm.add_constant(alts))
+                olsreg = sm.OLS(residual_utility, sm.add_constant(self.altCharacteristics))
                 olsfit = olsreg.fit()
 
                 # compute the price instrument by solving for prices that clear the market - which means the prices that produce the mean indirect utilities found
                 # in the first stage, since those are the market-clearing utilities.
                 priceIv = (self.mean_indirect_utility - olsfit.fittedvalues) / priceCoef
 
-                ivreg = linearmodels.IV2SLS(self.mean_indirect_utility, sm.add_constant(alts), pd.DataFrame(self.price.rename('price')), pd.DataFrame(priceIv.rename('price_iv')))
+                ivreg = linearmodels.IV2SLS(self.mean_indirect_utility, sm.add_constant(self.altCharacteristics), pd.DataFrame(self.price.rename('price')), pd.DataFrame(priceIv.rename('price_iv')))
                 self.second_stage_fit = ivreg.fit()
 
                 priceCoef = self.second_stage_fit.params.price
 
+                iter += 1
                 pbar.update()
                 if np.abs(priceCoef - prevPriceCoef) < 1e-6:
                     endTime = time.clock()
                     LOG.info(f'Price coefficient converged in {endTime-startTime:.3f} seconds after {iter} iterations')
                     self.mean_params = self.second_stage_fit.params
                     #self.mean_params_se = self.second_stage_fit.bse
-                    self.type_shock = self.second_stage_fit.resids
+                    self.type_shock = self.second_stage_fit.resids # TODO ensure this does not include residuals from the first stage 2SLS estimates
                     self.price_iv = priceIv
                     break
                 else:
@@ -274,29 +264,35 @@ Convergence:
         summary['p'] = (1 - scipy.stats.norm.cdf(np.abs(summary.z))) * 2
         return summary
 
-    def utilities (self):
-        "Get utilities of every household choosing every house type"
-        fullAlternativesWithInteractions = self.fullAlternatives.join(self.hh)
+    def rebuild_full_alternatives_with_interactions (self):
+        "Call after attributes of alternatives have changed to get utilities right"
+        self.fullAlternativesWithInteractions = self.fullAlternatives.join(self.hh)
 
         for left, right in self.interactions:
-            fullAlternativesWithInteractions[f'{left}_{right}'] = fullAlternativesWithInteractions[left] * fullAlternativesWithInteractions[right]
+            self.fullAlternativesWithInteractions[f'{left}_{right}'] = self.fullAlternativesWithInteractions[left] * self.fullAlternativesWithInteractions[right]
 
-        fullAlternativesWithInteractions['price'] = self.price.reindex(fullAlternativesWithInteractions.index, level=1)
+        self.fullTypeShock = self.type_shock.reindex(self.fullAlternativesWithInteractions.index, level=1)
+        self.fullAlternativesWithInteractions['price'] = self.price.reindex(self.fullAlternativesWithInteractions.index, level=1)
 
+    def utilities (self):
+        "Get utilities of every household choosing every house type"
         # compute utilities, without unobserved price shocks
         params = pd.concat([self.mean_params, self.interaction_params])
-        utilities = sm.add_constant(fullAlternativesWithInteractions)[params.index].multiply(params, 'columns').sum(axis='columns')
-        utilities += self.type_shock.reindex(fullAlternativesWithInteractions.index, level=1)
+        utilities = sm.add_constant(self.fullAlternativesWithInteractions)[params.index].multiply(params, 'columns').sum(axis='columns')
+        utilities += self.fullTypeShock
 
         # solve numerical problems by making all utilities positive
         # you can add a constant to all utilities for a particular household and get the same probabilities
-        utilities -= utilities.groupby(level=0).min().reindex(utilities.index, level=0)
+        #utilities -= utilities.groupby(level=0).min().reindex(utilities.index, level=0)
 
         return utilities
 
     # work in percentages rather than probabilities to avoid underflow issues
-    def probabilities (self):
-        expUtilities = np.exp(self.utilities())
+    def probabilities (self, utilities=None):
+        if utilities is None:
+            utilities = self.utilities()
+
+        expUtilities = np.exp(utilities)
         if not np.all(np.isfinite(expUtilities)):
             LOG.warn('some utilities are not finite when exponentiated')
         if not np.all(expUtilities > 0):
@@ -305,8 +301,8 @@ Convergence:
         percentages = (expUtilities) / logsums.reindex(expUtilities.index, level=0)
         return percentages
 
-    def market_shares (self):
-        return self.probabilities().groupby(level=1).sum()
+    def market_shares (self, utilities=None):
+        return self.probabilities(utilities=utilities).groupby(level=1).sum()
 
     def clear_market (self):
         'Adjust prices so the market clears'
@@ -314,23 +310,28 @@ Convergence:
 
         LOG.info('Clearing the market (everyone stand back)')
 
-        mktShares = self.market_shares()
-        iters = 0
+        # compute implied first-stage mean indirect utilities
+        # TODO duplicated code here
+        mean_indirect_utility = self.mean_indirect_utility # copy from first stage estimation
         with tqdm() as pbar:
-            while np.max(np.abs(mktShares - self.supply)) > self.MARKET_CLEARING_TOLERANCE:
-                self.price *= (((mktShares / self.supply) - 1) * -self.mean_params.price) + 1
-                mktShares = self.market_shares()
-                iters += 1
-                pbar.update(1)
-                pbar.set_description(f'max abs diff: {np.max(np.abs(mktShares - self.supply)):.3f} units')
+            while True:
+                firstStageUtilities = sm.add_constant(self.fullAlternativesWithInteractions)[self.interaction_params.index].multiply(self.interaction_params, 'columns').sum(axis='columns')
+                firstStageUtilities += mean_indirect_utility.loc[firstStageUtilities.index.get_level_values('choice')].values
+                expUtils = np.exp(firstStageUtilities)
+                firstStageShares = (expUtils / expUtils.groupby(level=0).sum()).groupby(level=1).sum()
+                mean_indirect_utility = mean_indirect_utility - np.log(firstStageShares / self.supply)
+                pbar.update()
+                if np.abs(firstStageShares.sum() - self.supply.sum()) > 1e-3:
+                    raise ValueError('Total demand does not equal total supply! This may be a scaling issue.')
+                if np.max(np.abs(firstStageShares - self.supply)) < 1e-6:
+                    break
+
+        # solve for price
+        nonPriceParams = self.mean_params.drop(['price'])
+        nonPriceObsUtilities = sm.add_constant(self.altCharacteristics)[nonPriceParams.index].multiply(nonPriceParams, axis='columns').sum(axis='columns')
+        self.price = (mean_indirect_utility - nonPriceObsUtilities - self.type_shock) / self.mean_params.price
+        self.fullAlternativesWithInteractions['price'] = self.price.reindex(self.fullAlternativesWithInteractions.index, level=1)
 
         maxPriceChange = np.max(np.abs(self.price - prices))
-        LOG.info(f'Market cleared after {iters} iterations, with absolute price changes of up to {maxPriceChange}')
-
-
-
-
-
-
-
-
+        LOG.info(f'Market cleared with absolute price changes of up to {maxPriceChange}')
+        LOG.info(f'New price distribution: {self.price.describe()}')
