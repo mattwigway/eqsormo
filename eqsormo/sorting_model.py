@@ -136,7 +136,9 @@ Convergence:
         # TODO I don't think that adding the mean_indirect_utility this way will work from an indexing standpoint
         # diffs is differences due to sociodemographics from mean indirect utility
         diffs = self.firstStageData.multiply(params, axis='columns').sum(axis='columns')
-        return diffs + mean_indirect_utility.loc[self.firstStageData.index.get_level_values('choice')].values
+        utilities = diffs + mean_indirect_utility.loc[self.firstStageData.index.get_level_values('choice')].values
+        utilities -= utilities.groupby(level=0).min().reindex(utilities.index, level=0) # can add constant to utilities and get same result, but solve numerical problems
+        return utilities
 
     def first_stage_logprobabilities (self, params, mean_indirect_utility):
         utility = self.first_stage_utility(params, mean_indirect_utility)
@@ -191,8 +193,9 @@ Convergence:
             self.firstStageData[f'{interaction[0]}_{interaction[1]}'] =\
                  altsWithHhCharacteristics[interaction[0]] * altsWithHhCharacteristics[interaction[1]]
             # solve scaling issues
-            stdevs = self.firstStageData.apply(np.std)
-            self.firstStageData = self.firstStageData.divide(stdevs, axis='columns')
+
+        stdevs = self.firstStageData.apply(np.std)
+        self.firstStageData = self.firstStageData.divide(stdevs, axis='columns')
         
         LOG.info(f'Fitting {len(self.firstStageData.columns)} interaction parameters')
 
@@ -208,8 +211,8 @@ Convergence:
         )
 
         self.first_stage_loglik_beta = -self.first_stage_neg_loglikelihood(minResults.x)
-        self.interaction_params = pd.Series(minResults.x, self.firstStageData.columns) * stdevs # correct the scaling
-        self.interaction_params_se = pd.Series(np.sqrt(np.diag(minResults.hess_inv)), self.firstStageData.columns) * stdevs
+        self.interaction_params = pd.Series(minResults.x, self.firstStageData.columns) / stdevs # correct the scaling
+        self.interaction_params_se = pd.Series(np.sqrt(np.diag(minResults.hess_inv)), self.firstStageData.columns) / stdevs
         # TODO robust SEs
         self.mean_indirect_utility = self.compute_mean_indirect_utility(self.interaction_params)
         self.first_stage_converged = minResults.success
@@ -285,13 +288,22 @@ Convergence:
         utilities = sm.add_constant(fullAlternativesWithInteractions)[params.index].multiply(params, 'columns').sum(axis='columns')
         utilities += self.type_shock.reindex(fullAlternativesWithInteractions.index, level=1)
 
+        # solve numerical problems by making all utilities positive
+        # you can add a constant to all utilities for a particular household and get the same probabilities
+        utilities -= utilities.groupby(level=0).min().reindex(utilities.index, level=0)
+
         return utilities
 
+    # work in percentages rather than probabilities to avoid underflow issues
     def probabilities (self):
         expUtilities = np.exp(self.utilities())
+        if not np.all(np.isfinite(expUtilities)):
+            LOG.warn('some utilities are not finite when exponentiated')
+        if not np.all(expUtilities > 0):
+            LOG.warn('some utilities are zero when exponentiated')
         logsums = expUtilities.groupby(level=0).sum() # group by households and sum
-        probabilities = expUtilities / logsums.reindex(expUtilities.index, level=0)
-        return probabilities
+        percentages = (expUtilities) / logsums.reindex(expUtilities.index, level=0)
+        return percentages
 
     def market_shares (self):
         return self.probabilities().groupby(level=1).sum()
