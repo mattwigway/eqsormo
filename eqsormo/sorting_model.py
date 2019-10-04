@@ -22,6 +22,7 @@ import numpy as np
 import scipy.optimize, scipy.stats
 import linearmodels
 from tqdm import tqdm
+import pickle
 
 LOG = getLogger(__name__)
 
@@ -313,10 +314,12 @@ Convergence:
         # compute implied first-stage mean indirect utilities
         # TODO duplicated code here
         mean_indirect_utility = self.mean_indirect_utility # copy from first stage estimation
+
+        # utilities with constants - pre compute for performance
+        baseUtilities = sm.add_constant(self.fullAlternativesWithInteractions)[self.interaction_params.index].multiply(self.interaction_params, 'columns').sum(axis='columns')
         with tqdm() as pbar:
             while True:
-                firstStageUtilities = sm.add_constant(self.fullAlternativesWithInteractions)[self.interaction_params.index].multiply(self.interaction_params, 'columns').sum(axis='columns')
-                firstStageUtilities += mean_indirect_utility.loc[firstStageUtilities.index.get_level_values('choice')].values
+                firstStageUtilities = baseUtilities + mean_indirect_utility.loc[baseUtilities.index.get_level_values('choice')].values
                 expUtils = np.exp(firstStageUtilities)
                 firstStageShares = (expUtils / expUtils.groupby(level=0).sum()).groupby(level=1).sum()
                 mean_indirect_utility = mean_indirect_utility - np.log(firstStageShares / self.supply)
@@ -335,3 +338,25 @@ Convergence:
         maxPriceChange = np.max(np.abs(self.price - prices))
         LOG.info(f'Market cleared with absolute price changes of up to {maxPriceChange}')
         LOG.info(f'New price distribution: {self.price.describe()}')
+
+    def to_pickle (self, fn):
+        "Save a fit model to disk"
+        if isinstance(fn, str):
+            with open(fn, 'wb') as out:
+                pickle.dump(self, out)
+        else:
+            pickle.dump(self, fn)
+
+    @staticmethod
+    def from_pickle (fn):
+        "Read a previously saved model"
+        if isinstance(fn, str):
+            with open(fn, 'rb') as inf:
+                model = pickle.load(inf)
+        else:
+            model = pickle.load(fn)
+
+        if not isinstance(model, SortingModel):
+            raise ValueError('File does not contain a sorting model!')
+
+        return model
