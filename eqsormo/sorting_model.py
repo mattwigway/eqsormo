@@ -20,6 +20,7 @@ import statsmodels.api as sm
 import pandas as pd
 import numpy as np
 import scipy.optimize, scipy.stats
+import linearmodels
 from tqdm import tqdm
 
 LOG = getLogger(__name__)
@@ -67,7 +68,7 @@ class SortingModel(object):
         # Protective copies of all the things
         self.altHousing = altHousing.copy()
         self.altNeighborhood = altNeighborhood.copy()
-        self.origPrice = altPrice.copy()
+        self.price = altPrice.copy()
         self.altHedonic = altHedonic.copy()
         self.hh = hh.copy().apply(lambda col: col - col.mean()) # predemean household characteristics
         self.hh.index.name = 'household' # for joining convenience later
@@ -137,11 +138,12 @@ Convergence:
         diffs = self.firstStageData.multiply(params, axis='columns').sum(axis='columns')
         return diffs + mean_indirect_utility.loc[self.firstStageData.index.get_level_values('choice')].values
 
-    def first_stage_probabilities (self, params, mean_indirect_utility):
-        expUtility = np.exp(self.first_stage_utility(params, mean_indirect_utility))
+    def first_stage_logprobabilities (self, params, mean_indirect_utility):
+        utility = self.first_stage_utility(params, mean_indirect_utility)
+        expUtility = np.exp(utility)
         if not np.all(np.isfinite(expUtility)):
             raise ValueError(f'Household/choice combinations {expUtility.index[~np.isfinite(expUtility)]} have non-finite utilities!')
-        return expUtility / expUtility.groupby(level=0).sum()
+        return utility - np.log(expUtility.groupby(level=0).sum())
 
     def compute_mean_indirect_utility (self, params):
         # These are the alternative specific constants, which are not fit by ML, but rather using a contraction mapping that lets
@@ -150,13 +152,13 @@ Convergence:
         LOG.debug('Computing mean indirect utilities (ASCs)')
         startTime = time.clock()
         mean_indirect_utility = self._prev_mean_indirect_utility
-        probs = self.first_stage_probabilities(params, mean_indirect_utility).groupby(level=1).sum() # group by housing types
+        probs = np.exp(self.first_stage_logprobabilities(params, mean_indirect_utility)).groupby(level=1).sum() # group by housing types
         # optimization: save starting values (makes it converge faster next time)
         iter = 0
         while True:
             iter += 1
             mean_indirect_utility = mean_indirect_utility - np.log(probs / self.supply)
-            probs = self.first_stage_probabilities(params, mean_indirect_utility).groupby(level=1).sum() # group by housing types
+            probs = np.exp(self.first_stage_logprobabilities(params, mean_indirect_utility)).groupby(level=1).sum() # group by housing types
             # TODO hardcoded tolerances below are bad
             if np.abs(probs.sum() - self.supply.sum()) > 1e-3:
                 raise ValueError('Total demand does not equal total supply! This may be a scaling issue.')
@@ -171,7 +173,7 @@ Convergence:
 
     def first_stage_neg_loglikelihood (self, params):
         mean_indirect_utility = self.compute_mean_indirect_utility(params)
-        logprobs = np.log(self.first_stage_probabilities(params, mean_indirect_utility))
+        logprobs = self.first_stage_logprobabilities(params, mean_indirect_utility)
         return -np.sum(logprobs.loc[list(zip(self.hhChoice.index, self.hhChoice))])
 
     def fit_first_stage (self):
@@ -214,9 +216,9 @@ Convergence:
 
         endTime = time.clock()
         if self.first_stage_converged:
-            LOG.info(f'First stage converged in {endTime - startTime:.3f} seconds: {minResults.status}')
+            LOG.info(f'First stage converged in {endTime - startTime:.3f} seconds: {minResults.message}')
         else:
-            LOG.error(f'First stage FAILED TO CONVERGE in {endTime - startTime:.3f} seconds: {minResults.status}')
+            LOG.error(f'First stage FAILED TO CONVERGE in {endTime - startTime:.3f} seconds: {minResults.message}')
 
     def fit_second_stage (self):
         'Fit the instrumental variables portion of the model'
@@ -226,53 +228,42 @@ Convergence:
 
         priceCoef = prevPriceCoef = self.initialPriceCoef
 
-        altsWithPrice = self.altHousing.join(self.altNeighborhood)
+        alts = self.altHousing.join(self.altNeighborhood)
 
         iter = 0
-        while True:
-            residual_utility = self.mean_indirect_utility - priceCoef * self.origPrice
-            # TODO should there be a constant? There isn't one in the paper. I guess that would make for two shock terms which we don't
-            # want
-            # Klaiber and Phaneuf (2010) don't include a constant, and it may not be needed, but Klaiber and Kuminoff (2014) note that
-            # it is if the mean indirect utilities are normalized. Ours aren't but we may still need it (TODO)
-            # TODO is the estimate for the constant always zero?
-            ivreg = sm.OLS(residual_utility, sm.add_constant(self.altCharacteristics))
-            ivfit = ivreg.fit()
+        with tqdm() as pbar:
+            while True:
+                residual_utility = self.mean_indirect_utility - priceCoef * self.price
+                # Constant should be included since location of ASCs is arbitrary, see Klaiber and Kuminoff (2014) note 9
+                olsreg = sm.OLS(residual_utility, sm.add_constant(alts))
+                olsfit = olsreg.fit()
 
-            # compute the price instrument
-            # TODO: both Klaiber and Phaneuf and Klaiber and Kuminoff say to "solve for the prices that clear the market"
-            # but don't provide details. It seems that to clear the market, we need to get the predicted mean indirect utilities
-            # to exactly equal the mean indirect utilities from stage 1, by adjusting prices. The xis will still be non-zero because
-            # when we estimate the final regression we don't include shocks from neighboring neighborhoods, but I'm not sure why those
-            # are called unobservable shocks because we literally observed them and then took them out. It seems like this algebra below
-            # is integrating the unobservable part into the prices?
-            ivPrice = (self.mean_indirect_utility - ivfit.fittedvalues) / priceCoef
+                # compute the price instrument by solving for prices that clear the market - which means the prices that produce the mean indirect utilities found
+                # in the first stage, since those are the market-clearing utilities.
+                priceIv = (self.mean_indirect_utility - olsfit.fittedvalues) / priceCoef
 
-            # TODO Do I do something special here since I have an instrumental variable, or is just plain OLS okay?
-            altsWithPrice['price_iv'] = ivPrice
-            secondStageReg = sm.OLS(self.mean_indirect_utility, sm.add_constant(altsWithPrice))
-            secondStageFit = secondStageReg.fit()
+                ivreg = linearmodels.IV2SLS(self.mean_indirect_utility, sm.add_constant(alts), pd.DataFrame(self.price.rename('price')), pd.DataFrame(priceIv.rename('price_iv')))
+                self.second_stage_fit = ivreg.fit()
 
-            priceCoef = secondStageFit.params.price_iv
-            LOG.debug(f'Second stage iteration ({iter}): price coefficient {priceCoef}')
-            iter += 1
+                priceCoef = self.second_stage_fit.params.price
 
-            if np.abs(priceCoef - prevPriceCoef) < 1e-6:
-                endTime = time.clock()
-                LOG.info(f'Price coefficient converged in {endTime-startTime:.3f} seconds after {iter} iterations')
-                self.mean_params = secondStageFit.params[(i for i in secondStageFit.params.index if i != 'const')]
-                self.mean_params_se = secondStageFit.bse
-                self.type_shock = secondStageFit.resid + secondStageFit.params.const
-                self.price_iv = ivPrice
-                break
-            else:
-                prevPriceCoef = priceCoef
+                pbar.update()
+                if np.abs(priceCoef - prevPriceCoef) < 1e-6:
+                    endTime = time.clock()
+                    LOG.info(f'Price coefficient converged in {endTime-startTime:.3f} seconds after {iter} iterations')
+                    self.mean_params = self.second_stage_fit.params
+                    #self.mean_params_se = self.second_stage_fit.bse
+                    self.type_shock = self.second_stage_fit.resids
+                    self.price_iv = priceIv
+                    break
+                else:
+                    prevPriceCoef = priceCoef
 
     def summary (self):
         # summarize params
         summary = pd.DataFrame({
             'coef': pd.concat([self.interaction_params, self.mean_params]),
-            'se': pd.concat([self.interaction_params_se, self.mean_params_se])
+            'se': self.interaction_params_se # TODO no standard errors for second stage yet...
         })
 
         summary['z'] = summary.coef / summary.se
@@ -280,21 +271,24 @@ Convergence:
         summary['p'] = (1 - scipy.stats.norm.cdf(np.abs(summary.z))) * 2
         return summary
 
-    def probabilities (self):
-        "Get probabilities of every household choosing every house type"
+    def utilities (self):
+        "Get utilities of every household choosing every house type"
         fullAlternativesWithInteractions = self.fullAlternatives.join(self.hh)
 
         for left, right in self.interactions:
             fullAlternativesWithInteractions[f'{left}_{right}'] = fullAlternativesWithInteractions[left] * fullAlternativesWithInteractions[right]
 
-        fullAlternativesWithInteractions['price_iv'] = self.price_iv.reindex(fullAlternativesWithInteractions.index, level=1)
+        fullAlternativesWithInteractions['price'] = self.price.reindex(fullAlternativesWithInteractions.index, level=1)
 
         # compute utilities, without unobserved price shocks
         params = pd.concat([self.mean_params, self.interaction_params])
-        utilities = fullAlternativesWithInteractions[params.index].multiply(params, 'columns').sum(axis='columns')
+        utilities = sm.add_constant(fullAlternativesWithInteractions)[params.index].multiply(params, 'columns').sum(axis='columns')
         utilities += self.type_shock.reindex(fullAlternativesWithInteractions.index, level=1)
 
-        expUtilities = np.exp(utilities)
+        return utilities
+
+    def probabilities (self):
+        expUtilities = np.exp(self.utilities())
         logsums = expUtilities.groupby(level=0).sum() # group by households and sum
         probabilities = expUtilities / logsums.reindex(expUtilities.index, level=0)
         return probabilities
@@ -304,7 +298,7 @@ Convergence:
 
     def clear_market (self):
         'Adjust prices so the market clears'
-        origPrices = self.price_iv # for comparison later
+        prices = self.price # for comparison later
 
         LOG.info('Clearing the market (everyone stand back)')
 
@@ -312,13 +306,13 @@ Convergence:
         iters = 0
         with tqdm() as pbar:
             while np.max(np.abs(mktShares - self.supply)) > self.MARKET_CLEARING_TOLERANCE:
-                self.price_iv *= (((mktShares / self.supply) - 1) * -self.mean_params.price_iv) + 1
+                self.price *= (((mktShares / self.supply) - 1) * -self.mean_params.price) + 1
                 mktShares = self.market_shares()
                 iters += 1
                 pbar.update(1)
                 pbar.set_description(f'max abs diff: {np.max(np.abs(mktShares - self.supply)):.3f} units')
 
-        maxPriceChange = np.max(np.abs(self.price_iv - origPrices))
+        maxPriceChange = np.max(np.abs(self.price - prices))
         LOG.info(f'Market cleared after {iters} iterations, with absolute price changes of up to {maxPriceChange}')
 
 

@@ -51,4 +51,4 @@ mod.create_alternatives()
 mod.fit()
 
 print(mod.summary())
-print(mod.market_)
+pass
