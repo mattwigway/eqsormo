@@ -23,6 +23,7 @@ import scipy.optimize, scipy.stats
 import linearmodels
 from tqdm import tqdm
 import pickle
+from .ascs import compute_ascs
 
 LOG = getLogger(__name__)
 
@@ -78,8 +79,6 @@ class SortingModel(object):
         assert not 'price' in self.altCharacteristics.columns
         self.method = method
 
-        self.MARKET_CLEARING_TOLERANCE = 1e-2 # how far from the true supply can the market share be (in this case, within 0.01 units)
-
     def validate (self):
         "Check for obvious errors in model inputs"
         LOG.warn('Validation function not implemented. You better be darn sure of your inputs.')
@@ -129,45 +128,25 @@ Convergence:
         # diffs is differences due to sociodemographics from mean indirect utility
         diffs = self.firstStageData.multiply(params, axis='columns').sum(axis='columns')
         utilities = diffs + mean_indirect_utility.loc[self.firstStageData.index.get_level_values('choice')].values
-        utilities -= utilities.groupby(level=0).min().reindex(utilities.index, level=0) # can add constant to utilities and get same result, but solve numerical problems
         return utilities
 
-    def first_stage_logprobabilities (self, params, mean_indirect_utility):
+    def first_stage_probabilities (self, params, mean_indirect_utility):
         utility = self.first_stage_utility(params, mean_indirect_utility)
         expUtility = np.exp(utility)
         if not np.all(np.isfinite(expUtility)):
             raise ValueError(f'Household/choice combinations {expUtility.index[~np.isfinite(expUtility)]} have non-finite utilities!')
-        return utility - np.log(expUtility.groupby(level=0).sum())
+        return expUtility / expUtility.groupby(level=0).sum()
 
     def compute_mean_indirect_utility (self, params):
         # These are the alternative specific constants, which are not fit by ML, but rather using a contraction mapping that lets
         # the model converge faster - see Equation 16 of Bayer et al. (2004).
-        # TODO better starting values for this?
-        LOG.debug('Computing mean indirect utilities (ASCs)')
-        startTime = time.clock()
-        mean_indirect_utility = self._prev_mean_indirect_utility
-        probs = np.exp(self.first_stage_logprobabilities(params, mean_indirect_utility)).groupby(level=1).sum() # group by housing types
-        # optimization: save starting values (makes it converge faster next time)
-        iter = 0
-        while True:
-            iter += 1
-            mean_indirect_utility = mean_indirect_utility - np.log(probs / self.supply)
-            probs = np.exp(self.first_stage_logprobabilities(params, mean_indirect_utility)).groupby(level=1).sum() # group by housing types
-            # TODO hardcoded tolerances below are bad
-            if np.abs(probs.sum() - self.supply.sum()) > 1e-3:
-                raise ValueError('Total demand does not equal total supply! This may be a scaling issue.')
-            if np.max(np.abs(probs - self.supply)) < 1e-6:
-                break
-        
-        endTime = time.clock()
-        LOG.debug(f'Computed {len(mean_indirect_utility)} mean indirect utilities in {endTime-startTime:.3f}s using {iter} iterations')
-
+        mean_indirect_utility = compute_ascs(self.firstStageData, params, self.supply, self._prev_mean_indirect_utility)
         self._prev_mean_indirect_utility = mean_indirect_utility
         return mean_indirect_utility
 
     def first_stage_neg_loglikelihood (self, params):
         mean_indirect_utility = self.compute_mean_indirect_utility(params)
-        logprobs = self.first_stage_logprobabilities(params, mean_indirect_utility)
+        logprobs = np.log(self.first_stage_probabilities(params, mean_indirect_utility))
         return -np.sum(logprobs.loc[list(zip(self.hhChoice.index, self.hhChoice))])
 
     def fit_first_stage (self):
@@ -246,7 +225,7 @@ Convergence:
                     endTime = time.clock()
                     LOG.info(f'Price coefficient converged in {endTime-startTime:.3f} seconds after {iter} iterations')
                     self.mean_params = self.second_stage_fit.params
-                    #self.mean_params_se = self.second_stage_fit.bse
+                    self.mean_params_se = self.second_stage_fit.std_errors # NB these are wrong b/c they don't account for variation in theta
                     self.type_shock = self.second_stage_fit.resids # TODO ensure this does not include residuals from the first stage 2SLS estimates
                     self.price_iv = priceIv
                     break
@@ -257,7 +236,7 @@ Convergence:
         # summarize params
         summary = pd.DataFrame({
             'coef': pd.concat([self.interaction_params, self.mean_params]),
-            'se': self.interaction_params_se # TODO no standard errors for second stage yet...
+            'se': pd.concat([self.interaction_params_se, self.mean_params_se]) # TODO no standard errors for second stage yet...
         })
 
         summary['z'] = summary.coef / summary.se
@@ -311,23 +290,8 @@ Convergence:
 
         LOG.info('Clearing the market (everyone stand back)')
 
-        # compute implied first-stage mean indirect utilities
-        # TODO duplicated code here
-        mean_indirect_utility = self.mean_indirect_utility # copy from first stage estimation
-
         # utilities with constants - pre compute for performance
-        baseUtilities = sm.add_constant(self.fullAlternativesWithInteractions)[self.interaction_params.index].multiply(self.interaction_params, 'columns').sum(axis='columns')
-        with tqdm() as pbar:
-            while True:
-                firstStageUtilities = baseUtilities + mean_indirect_utility.loc[baseUtilities.index.get_level_values('choice')].values
-                expUtils = np.exp(firstStageUtilities)
-                firstStageShares = (expUtils / expUtils.groupby(level=0).sum()).groupby(level=1).sum()
-                mean_indirect_utility = mean_indirect_utility - np.log(firstStageShares / self.supply)
-                pbar.update()
-                if np.abs(firstStageShares.sum() - self.supply.sum()) > 1e-3:
-                    raise ValueError('Total demand does not equal total supply! This may be a scaling issue.')
-                if np.max(np.abs(firstStageShares - self.supply)) < 1e-6:
-                    break
+        mean_indirect_utility = compute_ascs(self.fullAlternativesWithInteractions, self.interaction_params, self.supply, self.mean_indirect_utility)
 
         # solve for price
         nonPriceParams = self.mean_params.drop(['price'])
