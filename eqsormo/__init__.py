@@ -14,6 +14,8 @@
 
 import logging
 from .sorting_model import SortingModel
+from .tra import TraSortingModel
+from . import tra
 
 version = '0.0.1'
 
