@@ -137,8 +137,7 @@ class MNLFullASC(object):
             minResultsFinal = scipy.optimize.minimize(
                 self.negative_log_likelihood,
                 minResultsInitial.x,
-                method='bfgs',
-                options={'maxiter': 1}
+                method='bfgs'
             )
         else:
             minResultsFinal = minResultsInitial
