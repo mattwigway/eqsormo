@@ -73,6 +73,7 @@ class TraSortingModel(BaseSortingModel):
         self.housing_attributes = housing_attributes.copy()
         self.household_attributes = household_attributes.copy()
         self.interactions = interactions
+        self.second_stage_params = second_stage_params
         self.price = price.copy()
         self.orig_price = price.copy()
         self.income = income.copy()
@@ -175,6 +176,23 @@ class TraSortingModel(BaseSortingModel):
 
         self.first_stage_fit.fit()
 
+    def fit_second_stage (self):
+        LOG.info('fitting second stage')
+        startTime = time.clock()
+        self._second_stage_exog = sm.add_constant(self.housing_attributes[self.second_stage_params])
+        self._second_stage_endog = self.first_stage_fit.ascs.reindex(self._second_stage_exog.index)
+
+        mod = sm.OLS(self._second_stage_endog, self._second_stage_exog)
+        self.second_stage_fit = mod.fit()
+        endTime = time.clock()
+        LOG.info(f'Fit second stage in {endTime - startTime:.2f} seconds')
+
+    def fit (self):
+        self.fit_first_stage()
+        if self.second_stage_params is not None:
+            self.fit_second_stage()
+        else:
+            LOG.info('No second stage requested')
 
 
 

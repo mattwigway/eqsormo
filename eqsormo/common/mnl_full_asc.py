@@ -133,12 +133,14 @@ class MNLFullASC(object):
         )
 
         if self.method != 'bfgs':
-            # run one iter of bfgs to get SEs
+            # run bfgs to get SEs
             minResultsFinal = scipy.optimize.minimize(
                 self.negative_log_likelihood,
                 minResultsInitial.x,
                 method='bfgs'
             )
+
+            # TODO make sure it converged, func didn't change much etc
         else:
             minResultsFinal = minResultsInitial
 
@@ -156,13 +158,13 @@ class MNLFullASC(object):
 
         # TODO robust SEs
         self.ascs = self.compute_ascs(self.utility(minResultsFinal.x), minResultsFinal.x)
-        self.converged = minResultsInitial.success
+        self.converged = minResultsInitial.success and minResultsFinal.success
 
         endTime = time.clock()
         if self.converged:
-            LOG.info(f'Multinomial logit model converged in {endTime - startTime:.3f} seconds: {minResultsInitial.message}')
+            LOG.info(f'Multinomial logit model converged in {endTime - startTime:.3f} seconds: {minResultsInitial.message}, {minResultsFinal.message}')
         else:
-            LOG.error(f'Multinomial logit model FAILED TO CONVERGE in {endTime - startTime:.3f} seconds: {minResultsInitial.message}')
+            LOG.error(f'Multinomial logit model FAILED TO CONVERGE in {endTime - startTime:.3f} seconds: {minResultsInitial.message}, {minResultsFinal.message}')
         LOG.info(f'  Finding ASCs took {self.asc_time:.3f} seconds')
 
 
