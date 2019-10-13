@@ -26,6 +26,7 @@ import pickle
 
 from . import price_income
 from eqsormo.common import BaseSortingModel, MNLFullASC
+from eqsormo.common.compute_ascs import compute_ascs
 
 LOG = getLogger(__name__)
 
@@ -40,7 +41,7 @@ class TraSortingModel(BaseSortingModel):
     so that there is variation in price between households 
     '''
 
-    def __init__ (self, housing_attributes, household_attributes, interactions, second_stage_params, price, income, choice, price_income_transformation=price_income.logdiff, sample_alternatives=None, method='bfgs'):
+    def __init__ (self, housing_attributes, household_attributes, interactions, second_stage_params, price, income, choice, price_income_transformation=price_income.logdiff, sample_alternatives=None, method='L-BFGS-B'):
         '''
         Initialize a Tra sorting model
 
@@ -185,7 +186,45 @@ class TraSortingModel(BaseSortingModel):
 
         self.first_stage_fit.fit()
 
-        self.first_stage_ascs = pd.Series(self.first_stage_fit.ascs, index=choice_xwalk.index)
+        # descale coefs
+        self.first_stage_fit.params /= self._first_stage_stdevs
+        self.first_stage_fit.se /= self._first_stage_stdevs
+
+        # recalculate ASCs to clear full market
+        # to make the model tractable, we estimate on a sample of the alternatives - which provides consistent but inefficient parameter estimates
+        # (see Ben-Akiva and Lerman 1985)
+        # Since when we clear the market in scenario evaluation, we use the full set of alternatives, not just the sampled alternatives, we want
+        # the baseline (current conditions) to be market clearing as well, we re-estimate the ASCs with the full set of alternatives
+        # another way to look at this is that due to tractability concerns we cannot estimate the full model without alternative sampling,
+        # so we lose some efficiency - but we can estimate the ASCs without alternative sampling, so we don't lose the efficiency there.
+        full_first_stage_data = pd.DataFrame({
+            # demeaning b/c it was done in the Bayer paper - and since we don't sample from households no concerns about using the mean
+            f'{household}:{housing}': (self.fullAlternatives[household] - self.household_attributes[household].mean()) * self.fullAlternatives[housing]
+            for household, housing in self.interactions
+        })
+
+        if self.price_income_transformation.n_params > 0:
+            transformationParams = self.first_stage_fit.params.values[-self.price_income_transformation.n_params:]
+        else:
+            transformationParams = []
+
+        full_first_stage_data['budget'] = self.price_income_transformation\
+            .apply(self.fullAlternatives.income.values, self.fullAlternatives.price.values, *transformationParams)
+
+        base_utility = np.dot(full_first_stage_data, self.first_stage_fit.params) # params have been destandardized above
+
+        fullAscStartTime = time.clock()
+        ascs = compute_ascs(
+            base_utility,
+            self.supply.loc[choice_xwalk.index].values,
+            hh_xwalk.loc[full_first_stage_data.index.get_level_values('household')].values,
+            choice_xwalk.loc[full_first_stage_data.index.get_level_values('choice')].values,
+            starting_values=self.first_stage_fit.ascs
+        )
+        fullAscEndTime = time.clock()
+
+        self.first_stage_ascs = pd.Series(ascs, index=choice_xwalk.index)
+        LOG.info(f'Finding full ASCs took {fullAscEndTime - fullAscStartTime:.3f}s')
 
     def fit_second_stage (self):
         LOG.info('fitting second stage')
