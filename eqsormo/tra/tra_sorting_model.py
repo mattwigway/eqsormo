@@ -211,7 +211,10 @@ class TraSortingModel(BaseSortingModel):
         full_first_stage_data['budget'] = self.price_income_transformation\
             .apply(self.fullAlternatives.income.values, self.fullAlternatives.price.values, *transformationParams)
 
-        base_utility = np.dot(full_first_stage_data, self.first_stage_fit.params) # params have been destandardized above
+        # params have been destandardized above, so no need to standardize this data
+        # standardization is needed in estimation so that when the algorithm moves the param a tiny
+        # bit, the exp(utility) stays finite
+        base_utility = np.dot(full_first_stage_data, self.first_stage_fit.params)
 
         fullAscStartTime = time.clock()
         ascs = compute_ascs(
