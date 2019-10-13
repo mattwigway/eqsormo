@@ -20,6 +20,7 @@ import time
 from logging import getLogger
 import pandas as pd
 import time
+import statsmodels.tools.numdiff
 
 LOG = getLogger(__name__)
 
@@ -128,46 +129,40 @@ class MNLFullASC(object):
         # this is in fact the log likelihood at constants, because all ASCs are still estimated
         self.loglik_constants = -self.negative_log_likelihood(np.zeros_like(self.starting_values))
 
-        minResultsInitial = scipy.optimize.minimize(
+        minResults = scipy.optimize.minimize(
             self.negative_log_likelihood,
             self.starting_values,
             method=self.method,
             options={'disp': True}
         )
 
-        if self.method != 'bfgs':
-            # run bfgs to get SEs
-            minResultsFinal = scipy.optimize.minimize(
-                self.negative_log_likelihood,
-                minResultsInitial.x,
-                method='bfgs'
-            )
+        LOG.info('calculating and inverting Hessian')
+        hess = statsmodels.tools.numdiff.approx_hess3(minResults.x, self.negative_log_likelihood)
+        hessInv = np.linalg.inv(hess)
+        ses = np.sqrt(np.diag(hessInv))
+        LOG.info('done calculating and inverting Hessian')
 
-            # TODO make sure it converged, func didn't change much etc
-        else:
-            minResultsFinal = minResultsInitial
-
-        self.loglik_beta = -self.negative_log_likelihood(minResultsFinal.x)
+        self.loglik_beta = -self.negative_log_likelihood(minResults.x)
         if self.param_names is None:
-            self.params = minResultsFinal.x
-            self.se = np.sqrt(np.diag(minResultsFinal.hess_inv))
+            self.params = minResults.x
+            self.se = ses
         else:
-            self.params = pd.Series(minResultsFinal.x, index=self.param_names)
-            self.se = pd.Series(np.sqrt(np.diag(minResultsFinal.hess_inv)), index=self.param_names)
+            self.params = pd.Series(minResults.x, index=self.param_names)
+            self.se = pd.Series(ses, index=self.param_names)
 
         # TODO compute t-stats
         self.zvalues = self.params / self.se
         self.pvalues = scipy.stats.norm.cdf(1 - np.abs(self.zvalues))
 
         # TODO robust SEs
-        self.ascs = self.compute_ascs(self.utility(minResultsFinal.x), minResultsFinal.x)
-        self.converged = minResultsInitial.success and minResultsFinal.success
+        self.ascs = self.compute_ascs(self.utility(minResults.x), minResults.x)
+        self.converged = minResults.success
 
         endTime = time.clock()
         if self.converged:
-            LOG.info(f'Multinomial logit model converged in {endTime - startTime:.3f} seconds: {minResultsInitial.message}, {minResultsFinal.message}')
+            LOG.info(f'Multinomial logit model converged in {endTime - startTime:.3f} seconds: {minResults.message}')
         else:
-            LOG.error(f'Multinomial logit model FAILED TO CONVERGE in {endTime - startTime:.3f} seconds: {minResultsInitial.message}, {minResultsFinal.message}')
+            LOG.error(f'Multinomial logit model FAILED TO CONVERGE in {endTime - startTime:.3f} seconds: {minResults.message}')
         LOG.info(f'  Finding ASCs took {self.asc_time:.3f} seconds')
 
 
