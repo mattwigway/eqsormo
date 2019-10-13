@@ -141,11 +141,10 @@ class TraSortingModel(BaseSortingModel):
 
         # don't recalc sd each time, so that the scale of the budget variable is constant in transformation space
         self._first_stage_data['budget'] = self.price_income_transformation\
-            .apply(self.alternatives.income, self.alternatives.price, *transformationParams) / self._first_stage_stdevs['budget']
+            .apply(self.alternatives.income.values, self.alternatives.price.values, *transformationParams) / self._first_stage_stdevs['budget']
 
         # compute utilities
-        #namedCoefs = pd.Series(coefs, index=self._first_stage_data.columns)
-        return self._first_stage_data.multiply(coefs, axis='columns').sum(axis='columns')
+        return np.dot(self._first_stage_data.values, coefs).reshape(-1)
         
     def fit_first_stage (self):
         LOG.info('fitting first stage')
@@ -158,17 +157,27 @@ class TraSortingModel(BaseSortingModel):
         })
 
         self._first_stage_data['budget'] = self.price_income_transformation\
-            .apply(self.alternatives.income, self.alternatives.price, *self.price_income_transformation.starting_values)
+            .apply(self.alternatives.income.values, self.alternatives.price.values, *self.price_income_transformation.starting_values)
 
         # Note that budget will be rescaled by this standard deviation, not its new standard deviation when updated, so that the model does not get confused trying to
         # chase a variable whose scale is changing. This is just a hack to make the model converge, so it's not important that everything have standard deviation of exactly 1.
         self._first_stage_stdevs = self._first_stage_data.apply(np.std)
         self._first_stage_data /= self._first_stage_stdevs
 
+        # reindex everything into numpy arrays
+        choice_xwalk = pd.Series(np.arange(len(self.housing_attributes)), index=self.housing_attributes.index)
+        hh_xwalk = pd.Series(np.arange(len(self.household_attributes)), index=self.household_attributes.index)
+
+        choiceidx = choice_xwalk.loc[self._first_stage_data.index.get_level_values('choice')].values
+        hhidx = hh_xwalk.loc[self._first_stage_data.index.get_level_values('household')].values
+        chosen = np.array([self._first_stage_data.index.get_loc((hh, choice)) for hh, choice in zip(self.choice.index, self.choice)])
+
         self.first_stage_fit = MNLFullASC(
             utility=self.first_stage_utility,
-            choice=self.choice,
-            supply=self.supply,
+            choiceidx=choiceidx,
+            hhidx=hhidx,
+            chosen=chosen,
+            supply=self.supply.loc[choice_xwalk.index].values,
             starting_values=np.zeros(len(self._first_stage_data.columns) + self.price_income_transformation.n_params),
             param_names=[*self._first_stage_data.columns, *self.price_income_transformation.param_names],
             method=self.method
@@ -176,11 +185,13 @@ class TraSortingModel(BaseSortingModel):
 
         self.first_stage_fit.fit()
 
+        self.first_stage_ascs = pd.Series(self.first_stage_fit.ascs, index=choice_xwalk.index)
+
     def fit_second_stage (self):
         LOG.info('fitting second stage')
         startTime = time.clock()
         self._second_stage_exog = sm.add_constant(self.housing_attributes[self.second_stage_params])
-        self._second_stage_endog = self.first_stage_fit.ascs.reindex(self._second_stage_exog.index)
+        self._second_stage_endog = self.first_stage_ascs.reindex(self._second_stage_exog.index)
 
         mod = sm.OLS(self._second_stage_endog, self._second_stage_exog)
         self.second_stage_fit = mod.fit()
@@ -193,6 +204,8 @@ class TraSortingModel(BaseSortingModel):
             self.fit_second_stage()
         else:
             LOG.info('No second stage requested')
+
+    
 
 
 
