@@ -19,8 +19,9 @@ import scipy.optimize
 import time
 from logging import getLogger
 import pandas as pd
-import time
 import statsmodels.tools.numdiff
+
+from .compute_ascs import compute_ascs
 
 LOG = getLogger(__name__)
 
@@ -70,27 +71,7 @@ class MNLFullASC(object):
         else:
             ascs = np.zeros(self.choiceidx.max() + 1)
 
-        while True:
-            firstStageUtilities = baseUtilities + ascs[self.choiceidx]
-            expUtils = np.exp(firstStageUtilities)
-            if np.any(~np.isfinite(expUtils)):
-                raise ValueError('Some utilities are non-finite! This may be a scaling issue.')
-                    #'Current values of the parameters: ' + str(params))
-            
-            #firstStageShares = (expUtils / expUtils.groupby(level=0).sum()).groupby(level=1).sum()
-            logsums = np.bincount(self.hhidx, weights=expUtils)
-            firstStageProbs = expUtils / logsums[self.hhidx]
-            firstStageShares = np.bincount(self.choiceidx, weights=firstStageProbs)
-
-            if np.abs(np.sum(firstStageShares) - np.sum(self.supply)) > 1e-3:
-                raise ValueError('Total demand does not equal total supply! This may be a scaling issue.')
-            if np.max(np.abs(firstStageShares - self.supply)) < self.asc_convergence_criterion:
-                break
-            ascs = ascs - np.log(firstStageShares / self.supply)
-
-            # normalize, can add/subtract constant to utility and not change predictions
-            ascs -= ascs[0]
-
+        ascs = compute_ascs(baseUtilities, self.supply, self.hhidx, self.choiceidx, starting_values=ascs, convergence_criterion=self.asc_convergence_criterion)
         self._previous_ascs = ascs # speed convergence later
 
         endTime = time.clock()

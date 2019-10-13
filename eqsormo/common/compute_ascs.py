@@ -1,0 +1,82 @@
+#    Copyright 2019 Matthew Wigginton Conway
+
+#    Licensed under the Apache License, Version 2.0 (the "License");
+#    you may not use this file except in compliance with the License.
+#    You may obtain a copy of the License at
+
+#        http://www.apache.org/licenses/LICENSE-2.0
+
+#    Unless required by applicable law or agreed to in writing, software
+#    distributed under the License is distributed on an "AS IS" BASIS,
+#    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#    See the License for the specific language governing permissions and
+#    limitations under the License.
+
+# Author: Matthew Wigginton Conway <matt@indicatrix.org>, School of Geographical Sciences and Urban Planning, Arizona State University
+
+import numpy as np
+import numba
+
+@numba.jit(nopython=True)
+def compute_ascs (base_utilities, supply, hhidx, choiceidx, starting_values=None, convergence_criterion=1e-6):
+    '''
+    Compute the alternative specific constants (ASCs) that should be added to base_utilities to make the market shares equal supply.
+
+    This allows multinomial logit models with a full set of ASCs to converge a lot faster. For models with full sets of ASCs,
+    the maximum-likelihood estimate will reproduce market shares perfectly. This means that the ASCs are implied by any set of coefficients.
+    This algorithm finds those implied ASCs based on the "base" utilities provided - which are the utilities calculated based on the parameters,
+    but without ASCs.
+
+    This is based on equation 16 of Bayer et al (2004)
+
+    :param base_utilities: Vector of utilities calculated using the current parameters and variable values, but no ASCs
+    :type base_utilities: numpy.ndarray
+
+    :param supply: supply of each alternative
+    :type supply: numpy.ndarray
+
+    :param hhidx: household index associated with each utility
+    :type hhidx: numpy.ndarray
+
+    :param choiceidx: housing type index associated with each utility
+    :type choiceidx: numpy.ndarray
+
+    :param starting_values: starting values for ASCs, default all zeros
+    :type starting_values: numpy.ndarray with length equal to number of choices
+    '''
+
+    if starting_values is None:
+        starting_values = np.zeros(np.max(choiceidx) + 1)
+
+    ascs = starting_values
+
+    while True:
+        firstStageUtilities = base_utilities + ascs[choiceidx]
+        expUtils = np.exp(firstStageUtilities)
+        if np.any(~np.isfinite(expUtils)):
+            # TODO should raise ValueError, but that breaks numba
+            print('Some exponentiated utilities are non-finite! This may be a scaling issue.')
+            return np.array([42.0]) # will cause errors somewhere else, so the process will crash, and hopefully the user
+            # will find the output of the above print statement while debugging.
+        
+        #firstStageShares = (expUtils / expUtils.groupby(level=0).sum()).groupby(level=1).sum()
+        logsums = np.bincount(hhidx, weights=expUtils)
+        firstStageProbs = expUtils / logsums[hhidx]
+        firstStageShares = np.bincount(choiceidx, weights=firstStageProbs)
+
+        if np.abs(np.sum(firstStageShares) - np.sum(supply)) > 1e-3:
+            # TODO should raise ValueError, but that breaks numba
+            print('Total demand does not equal total supply! This may be a scaling issue.')
+            return np.array([42.0]) # will cause errors somewhere else, so the process will crash, and hopefully the user
+            # will find the output of the above print statement while debugging.
+            
+        if np.max(np.abs(firstStageShares - supply)) < convergence_criterion:
+            break
+        ascs = ascs - np.log(firstStageShares / supply)
+
+        # normalize, can add/subtract constant to utility and not change predictions
+        ascs -= ascs[0]
+
+    return ascs
+
+    
