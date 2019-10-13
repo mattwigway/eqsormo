@@ -32,7 +32,7 @@ class MNLFullASC(object):
     This class estimates such multinomial logit models.
     '''
 
-    def __init__ (self, utility, choice, supply, starting_values, method='bfgs', asc_convergence_criterion=1e-6, param_names=None):
+    def __init__ (self, utility, supply, hhidx, choiceidx, chosen, starting_values, method='L-BFGS-B', asc_convergence_criterion=1e-6, param_names=None):
         '''
         :param utility: Function that returns utility for all choice alternatives and decisionmakers for a given set of parameters, not including ASCs. Receives parameters as a numpy array. Should return a MultiIndexed-pandas dataframe with indices called 'decisionmaker' and 'choice'
         :type utility: function
@@ -50,10 +50,12 @@ class MNLFullASC(object):
         self.starting_values = starting_values
         self.method = method
         self.asc_convergence_criterion = asc_convergence_criterion
-        self.choice = choice
         self.param_names = param_names
         self._previous_ascs = None
         self.asc_time = 0
+        self.hhidx = hhidx
+        self.choiceidx = choiceidx
+        self.chosen = chosen
 
     def compute_ascs (self, baseUtilities, params):
         '''
@@ -65,26 +67,28 @@ class MNLFullASC(object):
         if self._previous_ascs is not None:
             ascs = self._previous_ascs
         else:
-            uniqueChoices = baseUtilities.index.unique(level='choice')
-            ascs = pd.Series(np.zeros(len(uniqueChoices)), index=uniqueChoices)
+            ascs = np.zeros(self.choiceidx.max() + 1)
 
         while True:
-            firstStageUtilities = baseUtilities + ascs.loc[baseUtilities.index.get_level_values('choice')].values
+            firstStageUtilities = baseUtilities + ascs[self.choiceidx]
             expUtils = np.exp(firstStageUtilities)
             if np.any(~np.isfinite(expUtils)):
-                if self.param_names is not None:
-                    params = pd.Series(params, index=self.param_names)
-                raise ValueError('Some utilities are non-finite! This may be a scaling issue.\n' +\
-                    f'Current values of the parameters: {params}')
-            firstStageShares = (expUtils / expUtils.groupby(level=0).sum()).groupby(level=1).sum()
-            if np.abs(firstStageShares.sum() - self.supply.sum()) > 1e-3:
+                raise ValueError('Some utilities are non-finite! This may be a scaling issue.')
+                    #'Current values of the parameters: ' + str(params))
+            
+            #firstStageShares = (expUtils / expUtils.groupby(level=0).sum()).groupby(level=1).sum()
+            logsums = np.bincount(self.hhidx, weights=expUtils)
+            firstStageProbs = expUtils / logsums[self.hhidx]
+            firstStageShares = np.bincount(self.choiceidx, weights=firstStageProbs)
+
+            if np.abs(np.sum(firstStageShares) - np.sum(self.supply)) > 1e-3:
                 raise ValueError('Total demand does not equal total supply! This may be a scaling issue.')
             if np.max(np.abs(firstStageShares - self.supply)) < self.asc_convergence_criterion:
                 break
             ascs = ascs - np.log(firstStageShares / self.supply)
 
             # normalize, can add/subtract constant to utility and not change predictions
-            ascs -= ascs.iloc[0]
+            ascs -= ascs[0]
 
         self._previous_ascs = ascs # speed convergence later
 
@@ -96,26 +100,25 @@ class MNLFullASC(object):
         'Full utilities including ASCs'
         baseUtilities = self.utility(params)
         ascs = self.compute_ascs(baseUtilities, params)
-        fullUtilities = baseUtilities + ascs.loc[baseUtilities.index.get_level_values('choice')].values
+        fullUtilities = baseUtilities + ascs[self.choiceidx]
         return fullUtilities
 
     def probabilities (self, params):
         utility = self.full_utility(params)
         expUtility = np.exp(utility)
         if not np.all(np.isfinite(expUtility)):
-            raise ValueError(f'Household/choice combinations {expUtility.index[~np.isfinite(expUtility)]} have non-finite utilities!')
-        return expUtility / expUtility.groupby(level=0).sum()
+            raise ValueError('Household/choice combinations ' + str(expUtility.index[~np.isfinite(expUtility)]) + ' have non-finite utilities!')
+        logsums = np.bincount(self.hhidx, weights=expUtility)
+        return expUtility / logsums[self.hhidx]
 
     def choice_probabilities (self, params):
         probabilities = self.probabilities(params)
-        return probabilities.loc[list(zip(self.choice.index, self.choice))]
+        return probabilities[self.chosen]
 
     def negative_log_likelihood (self, params):
         negll = -np.sum(np.log(self.choice_probabilities(params)))
         if np.isnan(negll) or not np.isfinite(negll):
-            if self.param_names is not None:
-                params = pd.Series(params, index=self.param_names)
-            LOG.warn(f'log-likelihood nan or not finite, for params:\n{params}') # just warn, solver may be able to get out of this
+            LOG.warn('log-likelihood nan or not finite, for params:\n' + str(params)) # just warn, solver may be able to get out of this
         return negll
 
     def fit (self):
