@@ -108,7 +108,11 @@ class MNLFullASC(object):
         startTime = time.clock()
 
         # this is in fact the log likelihood at constants, because all ASCs are still estimated
-        self.loglik_constants = -self.negative_log_likelihood(np.zeros_like(self.starting_values))
+        # Note that this is only true if starting values are all zeros
+        if not np.allclose(self.starting_values, 0):
+            LOG.warn('not all starting values are zero, log likelihood at constants is actually log likelihood at starting values and may be incorrect')
+        self.loglik_constants = -self.negative_log_likelihood(self.starting_values)
+
 
         minResults = scipy.optimize.minimize(
             self.negative_log_likelihood,

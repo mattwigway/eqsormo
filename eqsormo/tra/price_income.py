@@ -48,6 +48,10 @@ class FunctionalForm(object):
 # TODO: price > income? or drop from choice set
 logdiff = FunctionalForm(lambda income, price: np.log(income - price))
 
+# normcdf, kinda like log but defined below zero
+# assumes ppl are most price sensitive where budget = price
+normdiff = FunctionalForm(lambda income, price, scale: scipy.stats.norm.cdf(income - price, scale=scale), n_params=1, starting_values=np.array([1]), param_names=['normcdf_sd'])
+
 # square root of difference, as used in Tra (2010) robustness checks
 sqrtdiff = FunctionalForm(lambda income, price: np.sqrt(income - price))
 

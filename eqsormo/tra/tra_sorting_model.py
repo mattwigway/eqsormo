@@ -25,6 +25,7 @@ from tqdm import tqdm
 import pickle
 
 from . import price_income
+from .clear_market import clear_market
 from eqsormo.common import BaseSortingModel, MNLFullASC
 from eqsormo.common.compute_ascs import compute_ascs
 
@@ -132,7 +133,6 @@ class TraSortingModel(BaseSortingModel):
         LOG.info(f'Created {len(self.alternatives)} alternatives for {len(self.household_attributes)} households in {endTime - startTime:.3f} seconds')
 
     def first_stage_utility (self, params):
-        # todo is this the right self?
         if self.price_income_transformation.n_params > 0:
             coefs = params[:-self.price_income_transformation.n_params]
             transformationParams = params[-self.price_income_transformation.n_params:]
@@ -179,7 +179,7 @@ class TraSortingModel(BaseSortingModel):
             hhidx=hhidx,
             chosen=chosen,
             supply=self.supply.loc[choice_xwalk.index].values,
-            starting_values=np.zeros(len(self._first_stage_data.columns) + self.price_income_transformation.n_params),
+            starting_values=np.concatenate([np.zeros(len(self._first_stage_data.columns)), self.price_income_transformation.starting_values]),
             param_names=[*self._first_stage_data.columns, *self.price_income_transformation.param_names],
             method=self.method
         )
@@ -187,8 +187,10 @@ class TraSortingModel(BaseSortingModel):
         self.first_stage_fit.fit()
 
         # descale coefs
-        self.first_stage_fit.params /= self._first_stage_stdevs
-        self.first_stage_fit.se /= self._first_stage_stdevs
+        # but don't descale transformation parameters
+        # recall that the _result_ of the transformation, not the inputs, is what is scaled, so this is okay
+        self.first_stage_fit.params /= self._first_stage_stdevs.reindex(self.first_stage_fit.params.index, fill_value=1)
+        self.first_stage_fit.se /= self._first_stage_stdevs.reindex(self.first_stage_fit.params.index, fill_value=1)
 
         # recalculate ASCs to clear full market
         # to make the model tractable, we estimate on a sample of the alternatives - which provides consistent but inefficient parameter estimates
@@ -204,9 +206,11 @@ class TraSortingModel(BaseSortingModel):
         })
 
         if self.price_income_transformation.n_params > 0:
+            coefs = self.first_stage_fit.params.iloc[:-self.price_income_transformation.n_params]
             transformationParams = self.first_stage_fit.params.values[-self.price_income_transformation.n_params:]
         else:
-            transformationParams = []
+            coefs = self.first_stage_fit.params
+            transformationParams = np.array([])
 
         full_first_stage_data['budget'] = self.price_income_transformation\
             .apply(self.fullAlternatives.income.values, self.fullAlternatives.price.values, *transformationParams)
@@ -214,7 +218,8 @@ class TraSortingModel(BaseSortingModel):
         # params have been destandardized above, so no need to standardize this data
         # standardization is needed in estimation so that when the algorithm moves the param a tiny
         # bit, the exp(utility) stays finite
-        base_utility = np.dot(full_first_stage_data, self.first_stage_fit.params)
+
+        base_utility = np.dot(full_first_stage_data[coefs.index].values, coefs.values)
 
         fullAscStartTime = time.clock()
         ascs = compute_ascs(
@@ -232,11 +237,12 @@ class TraSortingModel(BaseSortingModel):
     def fit_second_stage (self):
         LOG.info('fitting second stage')
         startTime = time.clock()
-        self._second_stage_exog = sm.add_constant(self.housing_attributes[self.second_stage_params])
-        self._second_stage_endog = self.first_stage_ascs.reindex(self._second_stage_exog.index)
+        second_stage_exog = sm.add_constant(self.housing_attributes[self.second_stage_params])
+        second_stage_endog = self.first_stage_ascs.reindex(second_stage_exog.index)
 
-        mod = sm.OLS(self._second_stage_endog, self._second_stage_exog)
+        mod = sm.OLS(second_stage_endog, second_stage_exog)
         self.second_stage_fit = mod.fit()
+        self.type_shock = self.second_stage_fit.resid
         endTime = time.clock()
         LOG.info(f'Fit second stage in {endTime - startTime:.2f} seconds')
 
@@ -246,6 +252,107 @@ class TraSortingModel(BaseSortingModel):
             self.fit_second_stage()
         else:
             LOG.info('No second stage requested')
+
+    def sort (self):
+        'Clear the market after changes have been made to the data'
+        LOG.info('Clearing the market and sorting households')
+        LOG.info("There's nothing hidden in your head / the Sorting Hat can't see / so try me on and I will tell you / where you ought to be.\n" +\
+            "    -JK Rowling, Harry Potter and the Sorcerer's Stone")
+
+        # first update second stage
+        if self.second_stage_params is not None:
+            LOG.info('updating second stage')
+            pred_ascs = self.second_stage_fit.predict(sm.add_constant(self.housing_attributes[self.second_stage_params])) + self.type_shock
+            
+            maxabsdiff = np.max(np.abs(pred_ascs - self.first_stage_ascs))
+            LOG.info(f'Second stage updated with changes to first-stage ASCs of up to {maxabsdiff:.2f}')
+            self.first_stage_ascs = pred_ascs
+        else:
+            LOG.info('No second stage fit, not updating')
+            pred_ascs = self.first_stage_ascs
+
+        # then update the first stage
+        full_first_stage_data = pd.DataFrame({
+            # demeaning b/c it was done in the Bayer paper - and since we don't sample from households no concerns about using the mean
+            f'{household}:{housing}': (self.fullAlternatives[household] - self.household_attributes[household].mean()) * self.fullAlternatives[housing]
+            for household, housing in self.interactions
+        })
+
+        if self.price_income_transformation.n_params > 0:
+            coefs = self.first_stage_fit.params.iloc[:-self.price_income_transformation.n_params]
+            transformationParams = self.first_stage_fit.params.values[-self.price_income_transformation.n_params:]
+        else:
+            coefs = self.first_stage_fit.params
+            transformationParams = np.array([])
+
+        # set the budget utility to zero for all households - and solve for below
+        full_first_stage_data['budget'] = 0
+
+        choice_xwalk = pd.Series(np.arange(len(self.housing_attributes)), index=self.housing_attributes.index)
+        hh_xwalk = pd.Series(np.arange(len(self.household_attributes)), index=self.household_attributes.index)
+
+        choiceidx = choice_xwalk.loc[full_first_stage_data.index.get_level_values('choice')].values
+        hhidx = hh_xwalk.loc[full_first_stage_data.index.get_level_values('household')].values
+
+        base_utility = np.dot(full_first_stage_data[coefs.index].values, coefs.values)
+        non_price_utilities = base_utility + self.first_stage_ascs.loc[choice_xwalk.index].values[choiceidx]
+
+        startTimeClear = time.clock()
+        new_prices = clear_market(
+            non_price_utilities=non_price_utilities,
+            hhidx=hhidx,
+            choiceidx=choiceidx,
+            supply=self.supply.loc[choice_xwalk.index].values,
+            income=self.income.loc[hh_xwalk.index].values,
+            starting_price=self.price.loc[choice_xwalk.index].values,
+            price_income_transformation=self.price_income_transformation,
+            price_income_params=transformationParams,
+            budget_coef=self.first_stage_fit.params['budget']
+        )
+        endTimeClear = time.clock()
+
+        new_prices = pd.Series(new_prices, index=choice_xwalk.index)
+
+        maxPriceChange = np.max(np.abs(new_prices - self.price))
+
+        LOG.info(f'Market cleared in {endTimeClear - startTimeClear:.2f}s, with price changes up to {maxPriceChange:.4f}')
+
+        self.price = new_prices
+
+    def probabilities (self):
+        full_first_stage_data = pd.DataFrame({
+            # demeaning b/c it was done in the Bayer paper - and since we don't sample from households no concerns about using the mean
+            f'{household}:{housing}': (self.fullAlternatives[household] - self.household_attributes[household].mean()) * self.fullAlternatives[housing]
+            for household, housing in self.interactions
+        })
+
+        if self.price_income_transformation.n_params > 0:
+            coefs = self.first_stage_fit.params.iloc[:-self.price_income_transformation.n_params]
+            transformationParams = self.first_stage_fit.params.values[-self.price_income_transformation.n_params:]
+        else:
+            coefs = self.first_stage_fit.params
+            transformationParams = np.array([])
+
+        full_first_stage_data['budget'] = self.price_income_transformation.apply(self.fullAlternatives.income, self.fullAlternatives.price, *transformationParams)
+
+        choice_xwalk = pd.Series(np.arange(len(self.housing_attributes)), index=self.housing_attributes.index)
+        hh_xwalk = pd.Series(np.arange(len(self.household_attributes)), index=self.household_attributes.index)
+
+        choiceidx = choice_xwalk.loc[full_first_stage_data.index.get_level_values('choice')].values
+        hhidx = hh_xwalk.loc[full_first_stage_data.index.get_level_values('household')].values
+
+        utilities = np.dot(full_first_stage_data[coefs.index].values, coefs.values) + self.first_stage_ascs.loc[choice_xwalk.index].values[choiceidx]
+        exp_utilities = np.exp(utilities)
+
+        if not np.all(np.isfinite(exp_utilities)):
+            raise ValueError('Non-finite utility detected!')
+
+        logsums = np.bincount(hhidx, weights=exp_utilities)
+        probs = exp_utilities / logsums[hhidx]
+
+        return pd.Series(probs, index=full_first_stage_data.index).rename('choice_prob')
+
+
 
     
 
