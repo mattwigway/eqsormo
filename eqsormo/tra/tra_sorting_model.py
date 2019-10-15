@@ -42,7 +42,8 @@ class TraSortingModel(BaseSortingModel):
     so that there is variation in price between households 
     '''
 
-    def __init__ (self, housing_attributes, household_attributes, interactions, second_stage_params, price, income, choice, price_income_transformation=price_income.logdiff, sample_alternatives=None, method='L-BFGS-B'):
+    def __init__ (self, housing_attributes, household_attributes, interactions, second_stage_params, price, income, choice, price_income_transformation=price_income.logdiff,
+            sample_alternatives=None, method='L-BFGS-B', max_rent_to_income=None):
         '''
         Initialize a Tra sorting model
 
@@ -71,6 +72,9 @@ class TraSortingModel(BaseSortingModel):
         :type sample_alternatives: int or None
 
         :param method: A scipy.optimize.minimize method used for maximizing log-likelihood of first stage, default 'bfgs'
+
+        :param max_rent_to_income: Maximum proportion of income rent can be for the alternative to be included in the choice set - in (0, 1] if the price/income transformation can't handle income less than rent
+        :type max_rent_to_income: float or None
         '''
         self.housing_attributes = housing_attributes.copy()
         self.household_attributes = household_attributes.copy()
@@ -84,6 +88,7 @@ class TraSortingModel(BaseSortingModel):
         self.supply = choice.value_counts()
         self.price_income_transformation = price_income_transformation
         self.method = method
+        self.max_rent_to_income = max_rent_to_income
         self.validate()
 
     def validate (self):
@@ -95,6 +100,10 @@ class TraSortingModel(BaseSortingModel):
             LOG.error(f'Some housing alternatives are not chosen by any households!\n{choiceList}')
             allPassed = False
         
+        if self.max_rent_to_income is not None and not np.all(self.income.values * self.max_rent_to_income > self.price.loc[self.choice.reindex(self.income.index)].values):
+            LOG.error('Some households pay more in rent than the max rent to income ratio')
+            allPassed = False
+
         # TODO more checks
         if allPassed:
             LOG.info('All validation checks passed!')
@@ -113,14 +122,21 @@ class TraSortingModel(BaseSortingModel):
         self.fullAlternatives['hhchoice'] = self.choice.reindex(self.fullAlternatives.index, level=0)
         self.fullAlternatives.loc[self.fullAlternatives.index.get_level_values(1) == self.fullAlternatives.hhchoice, 'chosen'] = True
 
-        self.fullAlternatives = self.fullAlternatives[self.fullAlternatives.income > self.fullAlternatives.price].copy()
-
         LOG.info('created full set of alternatives, now sampling if requested')
 
         if self.sample_alternatives <= 0 or self.sample_alternatives is None:
-            self.alternatives = self.fullAlternatives
+            if self.max_rent_to_income is None:
+                self.alternatives = self.fullAlternatives
+            else:
+                self.alternatives = self.fullAlternatives[self.fullAlternatives.income * self.max_rent_to_income > self.fullAlternatives.price]
+
         else:
-            unchosenAlternatives = self.fullAlternatives[~self.fullAlternatives.chosen].groupby(level=0).apply(lambda x: x.sample(self.sample_alternatives - 1) if len(x) >= self.sample_alternatives else x)
+            if self.max_rent_to_income is None:
+                candidateAlternatives = self.fullAlternatives
+            else:
+                candidateAlternatives = self.fullAlternatives[self.fullAlternatives.income * self.max_rent_to_income > self.fullAlternatives.price]
+
+            unchosenAlternatives = candidateAlternatives[~candidateAlternatives.chosen].groupby(level=0).apply(lambda x: x.sample(self.sample_alternatives - 1) if len(x) >= self.sample_alternatives else x)
             unchosenAlternatives.index = unchosenAlternatives.index.droplevel(0) # fix dup'd household level due to groupby
             self.alternatives = pd.concat([unchosenAlternatives, self.fullAlternatives[self.fullAlternatives.chosen]]).sort_index(level=[0, 1])
 
@@ -205,6 +221,9 @@ class TraSortingModel(BaseSortingModel):
             for household, housing in self.interactions
         })
 
+        if self.max_rent_to_income is not None:
+            full_first_stage_data = full_first_stage_data[self.fullAlternatives.income.reindex(full_first_stage_data.index) * self.max_rent_to_income > self.price.reindex(full_first_stage_data.index, level='choice')]
+
         if self.price_income_transformation.n_params > 0:
             coefs = self.first_stage_fit.params.iloc[:-self.price_income_transformation.n_params]
             transformationParams = self.first_stage_fit.params.values[-self.price_income_transformation.n_params:]
@@ -213,7 +232,7 @@ class TraSortingModel(BaseSortingModel):
             transformationParams = np.array([])
 
         full_first_stage_data['budget'] = self.price_income_transformation\
-            .apply(self.fullAlternatives.income.values, self.fullAlternatives.price.values, *transformationParams)
+            .apply(self.fullAlternatives.income.loc[full_first_stage_data.index], self.fullAlternatives.price[full_first_stage_data.index], *transformationParams)
 
         # params have been destandardized above, so no need to standardize this data
         # standardization is needed in estimation so that when the algorithm moves the param a tiny
@@ -253,7 +272,7 @@ class TraSortingModel(BaseSortingModel):
         else:
             LOG.info('No second stage requested')
 
-    def sort (self):
+    def sort (self, maxiter=np.inf):
         'Clear the market after changes have been made to the data'
         LOG.info('Clearing the market and sorting households')
         LOG.info("There's nothing hidden in your head / the Sorting Hat can't see / so try me on and I will tell you / where you ought to be.\n" +\
@@ -278,6 +297,9 @@ class TraSortingModel(BaseSortingModel):
             for household, housing in self.interactions
         })
 
+        # Note that I am intentionally _not_ dropping hh/choice combinations here that do not meet rent to income criteria, because which households those are
+        # might change in the sorting phase. The filtering happens there. This does not matter for the calculation of utility below, since utilities for
+        # different alternatives are independent of each other and the budget is set to zero anyhow.
         if self.price_income_transformation.n_params > 0:
             coefs = self.first_stage_fit.params.iloc[:-self.price_income_transformation.n_params]
             transformationParams = self.first_stage_fit.params.values[-self.price_income_transformation.n_params:]
@@ -307,7 +329,9 @@ class TraSortingModel(BaseSortingModel):
             starting_price=self.price.loc[choice_xwalk.index].values,
             price_income_transformation=self.price_income_transformation,
             price_income_params=transformationParams,
-            budget_coef=self.first_stage_fit.params['budget']
+            budget_coef=self.first_stage_fit.params['budget'],
+            max_rent_to_income=self.max_rent_to_income,
+            maxiter=maxiter
         )
         endTimeClear = time.clock()
 
@@ -326,6 +350,9 @@ class TraSortingModel(BaseSortingModel):
             for household, housing in self.interactions
         })
 
+        if self.max_rent_to_income is not None:
+            full_first_stage_data = full_first_stage_data[self.fullAlternatives.income.reindex(full_first_stage_data.index) * self.max_rent_to_income > self.price.reindex(full_first_stage_data.index, level='choice')]
+
         if self.price_income_transformation.n_params > 0:
             coefs = self.first_stage_fit.params.iloc[:-self.price_income_transformation.n_params]
             transformationParams = self.first_stage_fit.params.values[-self.price_income_transformation.n_params:]
@@ -333,7 +360,7 @@ class TraSortingModel(BaseSortingModel):
             coefs = self.first_stage_fit.params
             transformationParams = np.array([])
 
-        full_first_stage_data['budget'] = self.price_income_transformation.apply(self.fullAlternatives.income, self.fullAlternatives.price, *transformationParams)
+        full_first_stage_data['budget'] = self.price_income_transformation.apply(self.fullAlternatives.income.loc[full_first_stage_data.index], self.fullAlternatives.price.loc[full_first_stage_data.index], *transformationParams)
 
         choice_xwalk = pd.Series(np.arange(len(self.housing_attributes)), index=self.housing_attributes.index)
         hh_xwalk = pd.Series(np.arange(len(self.household_attributes)), index=self.household_attributes.index)

@@ -58,3 +58,7 @@ sqrtdiff = FunctionalForm(lambda income, price: np.sqrt(income - price))
 # box-cox transform of income - price
 # Box and Cox (1964)
 boxcoxdiff = FunctionalForm(lambda income, price, lmbda: scipy.stats.boxcox(income - price, lmbda=lmbda), n_params=1, param_names=['boxcox_lambda'])
+
+# Form suggested by Stephane Hess in his advanced discrete choice modelling class
+# Note that this will not behave right if called on a subset of the data, since it uses the mean of income
+hess = FunctionalForm(lambda income, price, hess_lambda: ((income / np.mean(income)) ** hess_lambda) * price, n_params=1, param_names=['hess_lambda'], starting_values=[-1])
