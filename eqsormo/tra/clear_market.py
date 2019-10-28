@@ -44,8 +44,6 @@ def clear_market (non_price_utilities, hhidx, choiceidx, supply, income, startin
                 LOG.error(f'Prices FAILED TO CONVERGE in {maxiter} iterations!')
                 return price
 
-            prev_price[:] = price
-
             if max_rent_to_income is not None:
                 # could cause oscillation if price keeps going above max income
                 # Also, this will affect sorting equilibrium, because the price may effectively get fixed to the
@@ -77,6 +75,7 @@ def clear_market (non_price_utilities, hhidx, choiceidx, supply, income, startin
 
             # probably will need to remove if using numba
             maxpricediff = np.max(np.abs(price - prev_price))
+            prev_price[:] = price
             if max_rent_to_income is not None:
                 deltaNExcluded = np.sum(alt_income * max_rent_to_income <= price[choiceidx]) - origNExcluded
             else:
