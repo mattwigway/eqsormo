@@ -22,7 +22,7 @@ from logging import getLogger
 LOG = getLogger(__name__)
 
 def clear_market (non_price_utilities, hhidx, choiceidx, supply, income, starting_price, price_income_transformation,
-        price_income_params, budget_coef, max_rent_to_income=None, convergence_criterion=1e-6, step=1e-2, maxiter=np.inf):
+        price_income_params, budget_coef, max_rent_to_income=None, convergence_criterion=1e-5, step=1e-2, maxiter=np.inf, full_jacobian=False):
     '''
     Clear the market
 
@@ -68,7 +68,10 @@ def clear_market (non_price_utilities, hhidx, choiceidx, supply, income, startin
             if np.any(shares == 0):
                 raise ValueError('Some shares are zero.')
 
+            excess_demand = shares - supply
+
             maxdiff = np.max(np.abs(shares - supply))
+            #maxdiff = np.max(np.abs(excess_demand / supply))
             if maxdiff < convergence_criterion:
                 LOG.info(f'Prices converged after {itr} iterations')
                 return price
@@ -82,7 +85,7 @@ def clear_market (non_price_utilities, hhidx, choiceidx, supply, income, startin
                 deltaNExcluded = 'n/a'
             pbar.set_postfix({'max_unit_diff': maxdiff, 'max_price_diff': maxpricediff, 'delta_n_excluded': deltaNExcluded}, refresh=False)
 
-            # Use the approach defined in Tra (2007), page 108, eq. 7.7a, which is copied from Anas (1982)
+            # Use the approach defined in Tra (2007), page 108, eq. 7.7/7.7a, which is copied from Anas (1982)
             # first, compute derivative. Since the budget transformation is an arbitrary Python function, first compute its derivative.
             # since the budgets are independent between houses and between choosers, this is a fast numpy vectorized operation. We need a
             # loop to compute derivatives of budget. That can be done as a numpy vectorized operation
@@ -91,25 +94,42 @@ def clear_market (non_price_utilities, hhidx, choiceidx, supply, income, startin
             price_step = 0.01
             budget_step = price_income_transformation.apply(alt_income, alt_price + price_step, *price_income_params)
 
-            deriv = compute_derivatives (price, alt_income, choiceidx, hhidx, non_price_utilities, budget, budget_step, price_step, budget_coef, shares, max_rent_to_income)
-            
-            if not np.all(deriv < 0):
-                raise ValueError('some derivatives of price are nonnegative')
-
-            excess_demand = shares - supply
-
             # fix one price from changing
             # TODO pick price in a smarter way (PUMA with least change?)
-            excess_demand[0] = 0
+            # Appears to be causing convergence problems.
+            #excess_demand[0] = 0
 
-            # this is 7.7a from the paper
-            price = price - excess_demand / deriv
+            if full_jacobian:
+                jacob = compute_derivatives(price, alt_income, choiceidx, hhidx, non_price_utilities, budget, budget_step, price_step, budget_coef, shares, max_rent_to_income, full_jacobian=True)
+                inv_jacob = np.linalg.inv(jacob)
+                # this is 7.7 from the paper
+                price = price - np.matmul(inv_jacob, excess_demand)
+            else:
+                deriv = compute_derivatives(price, alt_income, choiceidx, hhidx, non_price_utilities, budget, budget_step, price_step, budget_coef, shares, max_rent_to_income, full_jacobian=False)
+            
+                if not np.all(deriv < 0):
+                    raise ValueError('some derivatives of price are nonnegative')
+
+                # this is 7.7a from the paper
+                price = price - excess_demand / deriv
 
             pbar.update()
 
+# workaround since numba complains about returning 2d/1d array
+def compute_derivatives (price, alt_income, choiceidx, hhidx, non_price_utilities, budget, budget_step, price_step, budget_coef, base_shares, max_rent_to_income, full_jacobian=False):
+    mat = _compute_derivatives(price, alt_income, choiceidx, hhidx, non_price_utilities, budget, budget_step, price_step, budget_coef, base_shares, max_rent_to_income, full_jacobian=full_jacobian)
+
+    if not full_jacobian:
+        mat = mat.reshape(len(price)) # make it 1d again
+
+    return mat
+
 @numba.jit(nopython=True)
-def compute_derivatives (price, alt_income, choiceidx, hhidx, non_price_utilities, budget, budget_step, price_step, budget_coef, base_shares, max_rent_to_income):
-    deriv = np.zeros_like(price)
+def _compute_derivatives (price, alt_income, choiceidx, hhidx, non_price_utilities, budget, budget_step, price_step, budget_coef, base_shares, max_rent_to_income, full_jacobian=False):
+    if full_jacobian:
+        jacob = np.zeros((len(price), len(price)))
+    else:
+        deriv = np.zeros_like(price)
 
     sim_budget = np.copy(budget)
     sim_price = np.copy(price[choiceidx])
@@ -131,15 +151,22 @@ def compute_derivatives (price, alt_income, choiceidx, hhidx, non_price_utilitie
 
         if not np.all(np.isfinite(exp_utility)):
             print('Not all exp(utilities) are finite (scaling?)')
-            return np.zeros(0) # will cause error, and hopefully someone will see message above - work around numba limitation on raising
+            return np.zeros((0, 0)) # will cause error, and hopefully someone will see message above - work around numba limitation on raising
 
         logsums = np.bincount(hhidx, weights=exp_utility)
         probs = exp_utility / logsums[hhidx]
 
-        share_step = np.sum(probs[choiceidx == i])
-        deriv[i] = (share_step - base_shares[i]) / price_step
+        if full_jacobian:
+            shares_step = np.bincount(choiceidx, weights=probs)
+            jacob[:,i] = (shares_step - base_shares) / price_step
+        else:
+            share_step = np.sum(probs[choiceidx == i])
+            deriv[i] = (share_step - base_shares[i]) / price_step
     
-    return deriv
+    if full_jacobian:
+        return jacob
+    else:
+        return deriv.reshape((len(deriv), 1))
     
 def compute_shares (price, supply, alt_income, choiceidx, hhidx, non_price_utilities, price_income_transformation, price_income_params, budget_coef,
         max_rent_to_income):
