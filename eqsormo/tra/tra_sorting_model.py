@@ -351,7 +351,9 @@ class TraSortingModel(BaseSortingModel):
         })
 
         if self.max_rent_to_income is not None:
-            full_first_stage_data = full_first_stage_data[self.fullAlternatives.income.reindex(full_first_stage_data.index) * self.max_rent_to_income > self.price.reindex(full_first_stage_data.index, level='choice')]
+            full_first_stage_data = full_first_stage_data[
+                self.fullAlternatives.income.reindex(full_first_stage_data.index) * self.max_rent_to_income >\
+                    self.price.reindex(full_first_stage_data.index, level='choice')]
 
         if self.price_income_transformation.n_params > 0:
             coefs = self.first_stage_fit.params.iloc[:-self.price_income_transformation.n_params]
@@ -360,7 +362,10 @@ class TraSortingModel(BaseSortingModel):
             coefs = self.first_stage_fit.params
             transformationParams = np.array([])
 
-        full_first_stage_data['budget'] = self.price_income_transformation.apply(self.fullAlternatives.income.loc[full_first_stage_data.index], self.fullAlternatives.price.loc[full_first_stage_data.index], *transformationParams)
+        full_first_stage_data['budget'] = self.price_income_transformation.apply(
+            self.fullAlternatives.income.loc[full_first_stage_data.index],
+            self.price.reindex(full_first_stage_data.index, level='choice'),
+            *transformationParams)
 
         choice_xwalk = pd.Series(np.arange(len(self.housing_attributes)), index=self.housing_attributes.index)
         hh_xwalk = pd.Series(np.arange(len(self.household_attributes)), index=self.household_attributes.index)
