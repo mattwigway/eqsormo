@@ -43,8 +43,8 @@ class TraSortingModel(BaseSortingModel):
     so that there is variation in price between households 
     '''
 
-    def __init__ (self, housing_attributes, household_attributes, interactions, second_stage_params, price, income, choice, price_income_transformation=price_income.logdiff,
-            sample_alternatives=None, method='L-BFGS-B', max_rent_to_income=None):
+    def __init__ (self, housing_attributes, household_attributes,  interactions, second_stage_params, price, income, choice, price_income_transformation=price_income.logdiff,
+            sample_alternatives=None, method='L-BFGS-B', max_rent_to_income=None, household_housing_attributes=None):
         '''
         Initialize a Tra sorting model
 
@@ -53,6 +53,9 @@ class TraSortingModel(BaseSortingModel):
 
         :param household_attributes: Attributes of households. It is okay if income is an attribute here as long as it is also passed in separately - since we assume it doesn't change when a household moves.
         :type household_attributes: Pandas dataframe
+
+        :param household_housing_attributes: Attributes of the combination of households and housing choices, multiindexed with household ID and choice ID. Must contain all possible combinations.
+        :type household_housing_attributes: Pandas dataframe
 
         :param interactions: Which household attributes should be interacted with which housing attributes in the first stage
         :type interactions: iterable of tuple (household_attributes column, housing_attributes column)
@@ -79,6 +82,7 @@ class TraSortingModel(BaseSortingModel):
         '''
         self.housing_attributes = housing_attributes.copy()
         self.household_attributes = household_attributes.copy()
+        self.household_housing_attributes = household_housing_attributes
         self.interactions = interactions
         self.second_stage_params = second_stage_params
         self.price = price.copy()
@@ -122,6 +126,9 @@ class TraSortingModel(BaseSortingModel):
         self.fullAlternatives['chosen'] = False
         self.fullAlternatives['hhchoice'] = self.choice.reindex(self.fullAlternatives.index, level=0)
         self.fullAlternatives.loc[self.fullAlternatives.index.get_level_values(1) == self.fullAlternatives.hhchoice, 'chosen'] = True
+
+        if self.household_housing_attributes is not None:
+            self.fullAlternatives = self.fullAlternatives.join(self.household_housing_attributes)
 
         LOG.info('created full set of alternatives, now sampling if requested')
 
@@ -168,11 +175,16 @@ class TraSortingModel(BaseSortingModel):
         LOG.info('fitting first stage')
         
         # create the data for the first stage
-        self._first_stage_data = pd.DataFrame({
+        if self.household_housing_attributes is not None:
+            otherInteractions = {vname: self.alternatives[vname] for vname in self.household_housing_interactions}
+        else:
+            otherInteractions = dict()
+
+        self._first_stage_data = pd.DataFrame({**{
             # demeaning b/c it was done in the Bayer paper
             f'{household}:{housing}': (self.alternatives[household] - self.household_attributes[household].mean()) * self.alternatives[housing]
             for household, housing in self.interactions
-        })
+        }, **otherInteractions})
 
         self._first_stage_data['budget'] = self.price_income_transformation\
             .apply(self.alternatives.income.values, self.alternatives.price.values, *self.price_income_transformation.starting_values)
@@ -292,11 +304,16 @@ class TraSortingModel(BaseSortingModel):
             pred_ascs = self.first_stage_ascs
 
         # then update the first stage
-        full_first_stage_data = pd.DataFrame({
+        if self.household_housing_attributes is not None:
+            otherInteractions = {vname: self.alternatives[vname] for vname in self.household_housing_interactions}
+        else:
+            otherInteractions = dict()
+
+        full_first_stage_data = pd.DataFrame({**{
             # demeaning b/c it was done in the Bayer paper - and since we don't sample from households no concerns about using the mean
             f'{household}:{housing}': (self.fullAlternatives[household] - self.household_attributes[household].mean()) * self.fullAlternatives[housing]
             for household, housing in self.interactions
-        })
+        }, **otherInteractions})
 
         # Note that I am intentionally _not_ dropping hh/choice combinations here that do not meet rent to income criteria, because which households those are
         # might change in the sorting phase. The filtering happens there. This does not matter for the calculation of utility below, since utilities for
@@ -345,11 +362,16 @@ class TraSortingModel(BaseSortingModel):
         self.price = new_prices
 
     def probabilities (self):
-        full_first_stage_data = pd.DataFrame({
+        if self.household_housing_attributes is not None:
+            otherInteractions = {vname: self.alternatives[vname] for vname in self.household_housing_interactions}
+        else:
+            otherInteractions = dict()
+        
+        full_first_stage_data = pd.DataFrame({**{
             # demeaning b/c it was done in the Bayer paper - and since we don't sample from households no concerns about using the mean
             f'{household}:{housing}': (self.fullAlternatives[household] - self.household_attributes[household].mean()) * self.fullAlternatives[housing]
             for household, housing in self.interactions
-        })
+        }, **otherInteractions})
 
         if self.max_rent_to_income is not None:
             full_first_stage_data = full_first_stage_data[
