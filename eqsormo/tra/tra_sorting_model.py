@@ -23,6 +23,7 @@ import scipy.optimize, scipy.stats
 import linearmodels
 from tqdm import tqdm
 import pickle
+import dill # allow pickling the FunctionalForm lamba expressions, https://stackoverflow.com/questions/25348532
 
 from . import price_income
 from .clear_market import clear_market
