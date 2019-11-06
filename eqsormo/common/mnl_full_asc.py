@@ -15,7 +15,7 @@
 # Author: Matthew Wigginton Conway <matt@indicatrix.org>, School of Geographical Sciences and Urban Planning, Arizona State University
 
 import numpy as np
-import scipy.optimize
+import scipy.optimize, scipy.stats
 import time
 from logging import getLogger
 import pandas as pd
@@ -158,6 +158,11 @@ class MNLFullASC(object):
             'z': self.zvalues,
             'p': self.pvalues
         }).round(3)
+
+        chi2 = 2 * (self.loglik_beta - self.loglik_constants)
+        chi2df = len(self.params)
+        pchi2 = 1 - scipy.stats.chi2.cdf(chi2, df=chi2df)
+
         return f'''
 Multinomial logit model with full ASCs
 Parameters:
@@ -166,5 +171,7 @@ Parameters:
 Log likelihood at constants: {self.loglik_constants:.3f}
 Log likelihood at convergence: {self.loglik_beta:.3f}
 Pseudo R-squared (McFadden): {1 - self.loglik_beta / self.loglik_constants:.3f}
+Chi2 (vs constants): {chi2}, {chi2df} degrees of freedom
+P(Chi2): {pchi2}
         '''
 
