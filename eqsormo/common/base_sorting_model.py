@@ -14,6 +14,7 @@
 
 # Author: Matthew Wigginton Conway <matt@indicatrix.org>, School of Geographical Sciences and Urban Planning, Arizona State University
 
+import dill
 import pickle
 
 class BaseSortingModel(object):
@@ -28,18 +29,18 @@ class BaseSortingModel(object):
         "Save a fit model to disk"
         if isinstance(fn, str):
             with open(fn, 'wb') as out:
-                pickle.dump(self, out)
+                dill.dump(self, out)
         else:
-            pickle.dump(self, fn)
+            dill.dump(self, fn)
 
     @classmethod
     def from_pickle (cls, fn):
         "Read a previously saved model"
         if isinstance(fn, str):
             with open(fn, 'rb') as inf:
-                model = pickle.load(inf)
+                model = dill.load(inf)
         else:
-            model = pickle.load(fn)
+            model = dill.load(fn)
 
         if not isinstance(model, cls):
             raise ValueError('File does not contain a sorting model!')
