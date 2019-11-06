@@ -23,12 +23,13 @@ import scipy.optimize, scipy.stats
 import linearmodels
 from tqdm import tqdm
 import pickle
-import dill # allow pickling the FunctionalForm lamba expressions, https://stackoverflow.com/questions/25348532
+import datetime
 
 from . import price_income
 from .clear_market import clear_market
 from eqsormo.common import BaseSortingModel, MNLFullASC
 from eqsormo.common.compute_ascs import compute_ascs
+import eqsormo
 
 LOG = getLogger(__name__)
 
@@ -95,6 +96,8 @@ class TraSortingModel(BaseSortingModel):
         self.method = method
         self.max_rent_to_income = max_rent_to_income
         self.validate()
+
+        self.creation_time = datetime.datetime.today()
 
     def validate (self):
         allPassed = True
@@ -176,7 +179,7 @@ class TraSortingModel(BaseSortingModel):
         
         # create the data for the first stage
         if self.household_housing_attributes is not None:
-            otherInteractions = {vname: self.alternatives[vname] for vname in self.household_housing_interactions}
+            otherInteractions = {vname: self.alternatives[vname] for vname in self.household_housing_attributes}
         else:
             otherInteractions = dict()
 
@@ -228,11 +231,15 @@ class TraSortingModel(BaseSortingModel):
         # the baseline (current conditions) to be market clearing as well, we re-estimate the ASCs with the full set of alternatives
         # another way to look at this is that due to tractability concerns we cannot estimate the full model without alternative sampling,
         # so we lose some efficiency - but we can estimate the ASCs without alternative sampling, so we don't lose the efficiency there.
-        full_first_stage_data = pd.DataFrame({
+        if self.household_housing_attributes is not None:
+            otherInteractions = {vname: self.fullAlternatives[vname] for vname in self.household_housing_attributes}
+        else:
+            otherInteractions = dict()
+        full_first_stage_data = pd.DataFrame({**{
             # demeaning b/c it was done in the Bayer paper - and since we don't sample from households no concerns about using the mean
             f'{household}:{housing}': (self.fullAlternatives[household] - self.household_attributes[household].mean()) * self.fullAlternatives[housing]
             for household, housing in self.interactions
-        })
+        }, **otherInteractions})
 
         if self.max_rent_to_income is not None:
             full_first_stage_data = full_first_stage_data[self.fullAlternatives.income.reindex(full_first_stage_data.index) * self.max_rent_to_income > self.price.reindex(full_first_stage_data.index, level='choice')]
@@ -305,7 +312,7 @@ class TraSortingModel(BaseSortingModel):
 
         # then update the first stage
         if self.household_housing_attributes is not None:
-            otherInteractions = {vname: self.alternatives[vname] for vname in self.household_housing_interactions}
+            otherInteractions = {vname: self.fullAlternatives[vname] for vname in self.household_housing_attributes}
         else:
             otherInteractions = dict()
 
@@ -363,7 +370,7 @@ class TraSortingModel(BaseSortingModel):
 
     def probabilities (self):
         if self.household_housing_attributes is not None:
-            otherInteractions = {vname: self.alternatives[vname] for vname in self.household_housing_interactions}
+            otherInteractions = {vname: self.fullAlternatives[vname] for vname in self.household_housing_attributes}
         else:
             otherInteractions = dict()
         
@@ -407,7 +414,33 @@ class TraSortingModel(BaseSortingModel):
 
         return pd.Series(probs, index=full_first_stage_data.index).rename('choice_prob')
 
+    def to_text (self, fn=None):
+        "Save model results as text. If fn==None, return as string"
 
+        outstring = '''Equilibrium sorting model (Tra [2007] formulation, price in first stage as budget constraint)
+Model run initiated at {creation_time}
+Budget function {price_income_transformation}
+
+First stage (discrete choice sorting model):
+{first_stage_summary}
+
+Second stage (OLS parameters):
+{second_stage_summary}
+
+Fit with EqSorMo version {version}, https://github.com/mattwigway/eqsormo            
+        '''.format(
+            first_stage_summary=self.first_stage_fit.summary(),
+            second_stage_summary=self.second_stage_fit.summary(),
+            creation_time=self.creation_time.strftime('%Y-%m-%d %H:%M:%S %Z'),
+            price_income_transformation=self.price_income_transformation.name,
+            version=eqsormo.version
+        )
+
+        if fn is not None:
+            with open(fn, 'w') as outfile:
+                outfile.write(outstring)
+        else:
+            return outstring
 
     
 
