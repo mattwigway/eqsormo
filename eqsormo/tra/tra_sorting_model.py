@@ -112,14 +112,29 @@ class TraSortingModel(BaseSortingModel):
             LOG.error('Some households pay more in rent than the max rent to income ratio')
             allPassed = False
 
+        for hhattr, hsgattr in self.interactions:
+            if hhattr not in self.household_attributes.columns:
+                LOG.error(f'Attribute {hhattr} is used in interactions but is not in household_attributes')
+                allPassed = False
+
+            if hsgattr not in self.housing_attributes.columns:
+                LOG.error(f'Attribute {hsgattr} is used in interactions but is not in housing_attributes')
+                allPassed = False
+
+        if self.second_stage_params is not None:
+            for hsgattr in self.second_stage_params:
+                if hsgattr not in self.housing_attributes.columns:
+                    LOG.error(f'Attribute {hsgattr} is used in second stage but is not in housing_attributes')
+                    allPassed = False
+
         # TODO more checks
         if allPassed:
             LOG.info('All validation checks passed!')
+        else:
+            raise ValueError('Some validation checks failed (see log messages)')
 
-    def create_alternatives (self):
-        LOG.info('Creating alternatives')
-        startTime = time.clock()
-
+    def create_full_alternatives (self):
+        # TODO re-run after un-pickling
         self.fullAlternatives = pd.concat([self.housing_attributes for i in range(len(self.household_attributes))], keys=self.household_attributes.index)
         self.fullAlternatives.index.rename(['household', 'choice'], inplace=True)
         self.household_attributes.index.rename('household', inplace=True)
@@ -133,6 +148,13 @@ class TraSortingModel(BaseSortingModel):
         if self.household_housing_attributes is not None:
             self.fullAlternatives = self.fullAlternatives.join(self.household_housing_attributes)
 
+
+    def create_alternatives (self):
+        LOG.info('Creating alternatives')
+        startTime = time.clock()
+
+        self.create_full_alternatives()
+       
         LOG.info('created full set of alternatives, now sampling if requested')
 
         if self.sample_alternatives <= 0 or self.sample_alternatives is None:
@@ -260,6 +282,9 @@ class TraSortingModel(BaseSortingModel):
 
         base_utility = np.dot(full_first_stage_data[coefs.index].values, coefs.values)
 
+        # TODO compute these with weights. This should be okay because the unweighted estimates are consistent if the sampling is conditional
+        # on the covariates, and with all the other assumptions we're making we might as well make that one as well... we're not doing much with
+        # the second stage estimates anyhow
         fullAscStartTime = time.clock()
         ascs = compute_ascs(
             base_utility,
@@ -441,6 +466,16 @@ Fit with EqSorMo version {version}, https://github.com/mattwigway/eqsormo
                 outfile.write(outstring)
         else:
             return outstring
+
+    # don't pickle fullAlternatives
+    def __getstate__ (self):
+        return {k: v for k, v in self.__dict__.items() if k != 'fullAlternatives'}
+
+    def from_pickle(cls, fn):
+        tra = super().from_pickle(fn)
+        tra.create_full_alternatives()
+        return tra
+
 
     
 
