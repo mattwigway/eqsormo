@@ -18,7 +18,7 @@ import numpy as np
 import numba
 
 @numba.jit(nopython=True)
-def compute_ascs (base_utilities, supply, hhidx, choiceidx, starting_values=None, convergence_criterion=1e-6):
+def compute_ascs (base_utilities, supply, hhidx, choiceidx, starting_values=None, convergence_criterion=1e-6, weights=None):
     '''
     Compute the alternative specific constants (ASCs) that should be added to base_utilities to make the market shares equal supply.
 
@@ -43,6 +43,9 @@ def compute_ascs (base_utilities, supply, hhidx, choiceidx, starting_values=None
 
     :param starting_values: starting values for ASCs, default all zeros
     :type starting_values: numpy.ndarray with length equal to number of choices
+
+    :param weights: household weights, indexed by hhidx (NOTE THAT SUPPLY SHOULD BE WEIGHTED AS WELL WHEN USING WEIGHTS)
+    :type weights: numpy.ndarray
     '''
 
     if starting_values is None:
@@ -56,12 +59,29 @@ def compute_ascs (base_utilities, supply, hhidx, choiceidx, starting_values=None
         if np.any(~np.isfinite(expUtils)):
             # TODO should raise ValueError, but that breaks numba
             print('Some exponentiated utilities are non-finite! This may be a scaling issue.')
+            print('Max ASC:')
+            print(np.max(ascs))
+            print('Min ASC')
+            print(np.min(ascs))
+            print('NaNs:')
+            print(np.sum(np.isnan(ascs)))
+            print('Min utility')
+            print(np.min(firstStageUtilities))
+            print('Max utility')
+            print(np.max(firstStageUtilities))
+            print('Min exp(utility)')
+            print(np.min(expUtils))
+            print('Max exp(utility)')
+            print(np.max(expUtils))
             return np.array([42.0]) # will cause errors somewhere else, so the process will crash, and hopefully the user
             # will find the output of the above print statement while debugging.
         
-        #firstStageShares = (expUtils / expUtils.groupby(level=0).sum()).groupby(level=1).sum()
         logsums = np.bincount(hhidx, weights=expUtils)
         firstStageProbs = expUtils / logsums[hhidx]
+
+        if weights is not None:
+            firstStageProbs *= weights[hhidx] # multiply each prob by the weight of the household it represents
+
         firstStageShares = np.bincount(choiceidx, weights=firstStageProbs)
 
         if np.abs(np.sum(firstStageShares) - np.sum(supply)) > 1e-3:

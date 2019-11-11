@@ -82,6 +82,8 @@ class MNLFullASC(object):
         'Full utilities including ASCs'
         baseUtilities = self.utility(params)
         ascs = self.compute_ascs(baseUtilities, params)
+        if len(ascs) == 1: # after error in underlying compute_ascs step
+            print(params)
         fullUtilities = baseUtilities + ascs[self.choiceidx]
         return fullUtilities
 

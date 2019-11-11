@@ -45,7 +45,7 @@ class TraSortingModel(BaseSortingModel):
     '''
 
     def __init__ (self, housing_attributes, household_attributes,  interactions, second_stage_params, price, income, choice, price_income_transformation=price_income.logdiff,
-            sample_alternatives=None, method='L-BFGS-B', max_rent_to_income=None, household_housing_attributes=None):
+            sample_alternatives=None, method='L-BFGS-B', max_rent_to_income=None, household_housing_attributes=None, weights=None):
         '''
         Initialize a Tra sorting model
 
@@ -91,7 +91,15 @@ class TraSortingModel(BaseSortingModel):
         self.income = income.copy()
         self.choice = choice.copy()
         self.sample_alternatives = sample_alternatives
-        self.supply = choice.value_counts()
+        self.unweighted_supply = choice.value_counts()
+        
+        if weights is None:
+            self.weights = None
+            self.weighted_supply = self.unweighted_supply
+        else:
+            self.weights = weights.reindex(self.choice.index)
+            self.weighted_supply = self.weights.groupby(self.choice).sum()
+
         self.price_income_transformation = price_income_transformation
         self.method = method
         self.max_rent_to_income = max_rent_to_income
@@ -117,14 +125,26 @@ class TraSortingModel(BaseSortingModel):
                 LOG.error(f'Attribute {hhattr} is used in interactions but is not in household_attributes')
                 allPassed = False
 
+            if self.household_attributes[hhattr].isnull().any():
+                LOG.error(f'Attribute {hhattr} contains NaNs')
+                allPassed = False
+
             if hsgattr not in self.housing_attributes.columns:
                 LOG.error(f'Attribute {hsgattr} is used in interactions but is not in housing_attributes')
+                allPassed = False
+
+            if self.housing_attributes[hsgattr].isnull().any():
+                LOG.error(f'Attribute {hsgattr} contains NaNs')
                 allPassed = False
 
         if self.second_stage_params is not None:
             for hsgattr in self.second_stage_params:
                 if hsgattr not in self.housing_attributes.columns:
                     LOG.error(f'Attribute {hsgattr} is used in second stage but is not in housing_attributes')
+                    allPassed = False
+
+                if self.housing_attributes[hsgattr].isnull().any():
+                    LOG.error(f'Attribute {hsgattr} contains NaNs')
                     allPassed = False
 
         # TODO more checks
@@ -193,6 +213,9 @@ class TraSortingModel(BaseSortingModel):
         self._first_stage_data['budget'] = self.price_income_transformation\
             .apply(self.alternatives.income.values, self.alternatives.price.values, *transformationParams) / self._first_stage_stdevs['budget']
 
+        if not np.all(np.isfinite(self._first_stage_data.budget)):
+            raise ValueError('not all budgets are finite (check model._first_stage_data.budget)')
+
         # compute utilities
         return np.dot(self._first_stage_data.values, coefs).reshape(-1)
         
@@ -232,7 +255,7 @@ class TraSortingModel(BaseSortingModel):
             choiceidx=choiceidx,
             hhidx=hhidx,
             chosen=chosen,
-            supply=self.supply.loc[choice_xwalk.index].values,
+            supply=self.unweighted_supply.loc[choice_xwalk.index].values, # fit without weights, adjust ASCs with weights below
             starting_values=np.concatenate([np.zeros(len(self._first_stage_data.columns)), self.price_income_transformation.starting_values]),
             param_names=[*self._first_stage_data.columns, *self.price_income_transformation.param_names],
             method=self.method
@@ -282,16 +305,18 @@ class TraSortingModel(BaseSortingModel):
 
         base_utility = np.dot(full_first_stage_data[coefs.index].values, coefs.values)
 
-        # TODO compute these with weights. This should be okay because the unweighted estimates are consistent if the sampling is conditional
-        # on the covariates, and with all the other assumptions we're making we might as well make that one as well... we're not doing much with
+        # compute these with weights. This should be okay because the unweighted estimates are consistent if the sampling is conditional
+        # on the choices, and with all the other assumptions we're making we might as well make that one as well... we're not doing much with
         # the second stage estimates anyhow
         fullAscStartTime = time.clock()
+
         ascs = compute_ascs(
             base_utility,
-            self.supply.loc[choice_xwalk.index].values,
+            self.weighted_supply.loc[choice_xwalk.index].values, # if there are no weights weighted_supply and unweighted_supply are identical
             hh_xwalk.loc[full_first_stage_data.index.get_level_values('household')].values,
             choice_xwalk.loc[full_first_stage_data.index.get_level_values('choice')].values,
-            starting_values=self.first_stage_fit.ascs
+            starting_values=self.first_stage_fit.ascs,
+            weights=self.weights.loc[hh_xwalk.index].values if self.weights is not None else None
         )
         fullAscEndTime = time.clock()
 
@@ -374,14 +399,15 @@ class TraSortingModel(BaseSortingModel):
             non_price_utilities=non_price_utilities,
             hhidx=hhidx,
             choiceidx=choiceidx,
-            supply=self.supply.loc[choice_xwalk.index].values,
+            supply=self.weighted_supply.loc[choice_xwalk.index].values, # weighted supply is identical to unweighted supply when there are no weights
             income=self.income.loc[hh_xwalk.index].values,
             starting_price=self.price.loc[choice_xwalk.index].values,
             price_income_transformation=self.price_income_transformation,
             price_income_params=transformationParams,
             budget_coef=self.first_stage_fit.params['budget'],
             max_rent_to_income=self.max_rent_to_income,
-            maxiter=maxiter
+            maxiter=maxiter,
+            weights=self.weights.loc[hh_xwalk.index].values if self.weights is not None else None
         )
         endTimeClear = time.clock()
 
@@ -436,6 +462,8 @@ class TraSortingModel(BaseSortingModel):
 
         logsums = np.bincount(hhidx, weights=exp_utilities)
         probs = exp_utilities / logsums[hhidx]
+
+        # NB not multiplying by weights here. This is the choice probability, not the market share
 
         return pd.Series(probs, index=full_first_stage_data.index).rename('choice_prob')
 
