@@ -22,7 +22,7 @@ from logging import getLogger
 LOG = getLogger(__name__)
 
 def clear_market (non_price_utilities, hhidx, choiceidx, supply, income, starting_price, price_income_transformation,
-        price_income_params, budget_coef, max_rent_to_income=None, convergence_criterion=1e-5, step=1e-2, maxiter=np.inf, full_jacobian=False):
+        price_income_params, budget_coef, max_rent_to_income=None, convergence_criterion=1e-5, step=1e-2, maxiter=np.inf, weights=None):
     '''
     Clear the market
 
@@ -62,7 +62,8 @@ def clear_market (non_price_utilities, hhidx, choiceidx, supply, income, startin
                 price_income_transformation=price_income_transformation,
                 price_income_params=price_income_params,
                 budget_coef=budget_coef,
-                max_rent_to_income=max_rent_to_income
+                max_rent_to_income=max_rent_to_income,
+                weights=weights
             )
 
             if np.any(shares == 0):
@@ -99,37 +100,20 @@ def clear_market (non_price_utilities, hhidx, choiceidx, supply, income, startin
             # Appears to be causing convergence problems.
             #excess_demand[0] = 0
 
-            if full_jacobian:
-                jacob = compute_derivatives(price, alt_income, choiceidx, hhidx, non_price_utilities, budget, budget_step, price_step, budget_coef, shares, max_rent_to_income, full_jacobian=True)
-                inv_jacob = np.linalg.inv(jacob)
-                # this is 7.7 from the paper
-                price = price - np.matmul(inv_jacob, excess_demand)
-            else:
-                deriv = compute_derivatives(price, alt_income, choiceidx, hhidx, non_price_utilities, budget, budget_step, price_step, budget_coef, shares, max_rent_to_income, full_jacobian=False)
-            
-                if not np.all(deriv < 0):
-                    raise ValueError('some derivatives of price are nonnegative')
+            deriv = compute_derivatives(price, alt_income, choiceidx, hhidx, non_price_utilities, budget, budget_step, price_step, budget_coef,
+                shares, max_rent_to_income, weights)
+        
+            if not np.all(deriv < 0):
+                raise ValueError('some derivatives of price are nonnegative')
 
-                # this is 7.7a from the paper
-                price = price - excess_demand / deriv
+            # this is 7.7a from the paper
+            price = price - excess_demand / deriv
 
             pbar.update()
 
-# workaround since numba complains about returning 2d/1d array
-def compute_derivatives (price, alt_income, choiceidx, hhidx, non_price_utilities, budget, budget_step, price_step, budget_coef, base_shares, max_rent_to_income, full_jacobian=False):
-    mat = _compute_derivatives(price, alt_income, choiceidx, hhidx, non_price_utilities, budget, budget_step, price_step, budget_coef, base_shares, max_rent_to_income, full_jacobian=full_jacobian)
-
-    if not full_jacobian:
-        mat = mat.reshape(len(price)) # make it 1d again
-
-    return mat
-
 @numba.jit(nopython=True)
-def _compute_derivatives (price, alt_income, choiceidx, hhidx, non_price_utilities, budget, budget_step, price_step, budget_coef, base_shares, max_rent_to_income, full_jacobian=False):
-    if full_jacobian:
-        jacob = np.zeros((len(price), len(price)))
-    else:
-        deriv = np.zeros_like(price)
+def compute_derivatives (price, alt_income, choiceidx, hhidx, non_price_utilities, budget, budget_step, price_step, budget_coef, base_shares, max_rent_to_income, weights):
+    deriv = np.zeros_like(price)
 
     sim_budget = np.copy(budget)
     sim_price = np.copy(price[choiceidx])
@@ -156,20 +140,16 @@ def _compute_derivatives (price, alt_income, choiceidx, hhidx, non_price_utiliti
         logsums = np.bincount(hhidx, weights=exp_utility)
         probs = exp_utility / logsums[hhidx]
 
-        if full_jacobian:
-            shares_step = np.bincount(choiceidx, weights=probs)
-            jacob[:,i] = (shares_step - base_shares) / price_step
-        else:
-            share_step = np.sum(probs[choiceidx == i])
-            deriv[i] = (share_step - base_shares[i]) / price_step
+        if weights is not None:
+            probs *= weights[hhidx]
+
+        share_step = np.sum(probs[choiceidx == i])
+        deriv[i] = (share_step - base_shares[i]) / price_step
     
-    if full_jacobian:
-        return jacob
-    else:
-        return deriv.reshape((len(deriv), 1))
+    return deriv
     
 def compute_shares (price, supply, alt_income, choiceidx, hhidx, non_price_utilities, price_income_transformation, price_income_params, budget_coef,
-        max_rent_to_income):
+        max_rent_to_income, weights):
     alt_price = price[choiceidx]
     budgets = price_income_transformation.apply(alt_income, alt_price, *price_income_params)
     full_utilities = non_price_utilities + budget_coef * budgets
@@ -185,5 +165,8 @@ def compute_shares (price, supply, alt_income, choiceidx, hhidx, non_price_utili
 
     logsums = np.bincount(hhidx, weights=expUtility)
     probs = expUtility / logsums[hhidx]
+
+    if weights is not None:
+        probs *= weights[hhidx]
 
     return np.bincount(choiceidx, weights=probs)
