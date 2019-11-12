@@ -499,6 +499,7 @@ Fit with EqSorMo version {version}, https://github.com/mattwigway/eqsormo
     def __getstate__ (self):
         return {k: v for k, v in self.__dict__.items() if k != 'fullAlternatives'}
 
+    @classmethod
     def from_pickle(cls, fn):
         tra = super().from_pickle(fn)
         tra.create_full_alternatives()
