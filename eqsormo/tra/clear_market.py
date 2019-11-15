@@ -136,7 +136,7 @@ def compute_derivatives (price, alt_income, choiceidx, hhidx, non_price_utilitie
 
         if not np.all(np.isfinite(exp_utility)):
             print('Not all exp(utilities) are finite (scaling?)')
-            return np.zeros((0, 0)) # will cause error, and hopefully someone will see message above - work around numba limitation on raising
+            return np.zeros(0) # will cause error, and hopefully someone will see message above - work around numba limitation on raising
 
         logsums = np.bincount(hhidx, weights=exp_utility)
         probs = exp_utility / logsums[hhidx]
