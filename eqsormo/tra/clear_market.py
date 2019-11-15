@@ -78,13 +78,14 @@ def clear_market (non_price_utilities, hhidx, choiceidx, supply, income, startin
                 return price
 
             # probably will need to remove if using numba
-            maxpricediff = np.max(np.abs(price - prev_price))
+            maxpricediff = np.max(price - prev_price)
+            minpricediff = np.min(price - prev_price)
             prev_price[:] = price
             if max_rent_to_income is not None:
                 deltaNExcluded = np.sum(alt_income * max_rent_to_income <= price[choiceidx]) - origNExcluded
             else:
                 deltaNExcluded = 'n/a'
-            pbar.set_postfix({'max_unit_diff': maxdiff, 'max_price_diff': maxpricediff, 'delta_n_excluded': deltaNExcluded}, refresh=False)
+            pbar.set_postfix({'max_unit_diff': maxdiff, 'max_price_diff': maxpricediff, 'min_price_diff': minpricediff, 'additional_excluded': deltaNExcluded}, refresh=False)
 
             # Use the approach defined in Tra (2007), page 108, eq. 7.7/7.7a, which is copied from Anas (1982)
             # first, compute derivative. Since the budget transformation is an arbitrary Python function, first compute its derivative.
