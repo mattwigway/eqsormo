@@ -108,7 +108,10 @@ def clear_market (non_price_utilities, hhidx, choiceidx, supply, income, startin
                 raise ValueError('some derivatives of price are nonnegative')
 
             # this is 7.7a from the paper
-            price = price - excess_demand / deriv
+            # multiply by 0.9 to ensure convergence rather than oscillation
+            # TODO the value of this hyperparameter may affect the scale of the market clearing prices and thus
+            # the sorting equilibrium due to the nonlinear response to price
+            price = price - 0.9 * (excess_demand / deriv)
 
             pbar.update()
 
