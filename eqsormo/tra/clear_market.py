@@ -122,13 +122,19 @@ def compute_derivatives (price, alt_income, choiceidx, hhidx, non_price_utilitie
     sim_budget = np.copy(budget)
     sim_price = np.copy(price[choiceidx])
 
+    # cache weights
+    if weights is not None:
+        alt_weights = weights[hhidx]
+
     for i in range(len(price)):
+        choicemask = choiceidx == i
+
         sim_budget[:] = budget
-        sim_budget[choiceidx == i] = budget_step[choiceidx == i]
+        sim_budget[choicemask] = budget_step[choicemask]
 
         # only used in places where price exceeds budget
         sim_price[:] = sim_price
-        sim_price[choiceidx == i] += price_step
+        sim_price[choicemask] += price_step
 
         full_utilities = non_price_utilities + budget_coef * sim_budget
         exp_utility = np.exp(full_utilities)
@@ -142,12 +148,12 @@ def compute_derivatives (price, alt_income, choiceidx, hhidx, non_price_utilitie
             return np.zeros(0) # will cause error, and hopefully someone will see message above - work around numba limitation on raising
 
         logsums = np.bincount(hhidx, weights=exp_utility)
-        probs = exp_utility / logsums[hhidx]
+        probs = exp_utility[choicemask] / logsums[hhidx][choicemask]
 
         if weights is not None:
-            probs *= weights[hhidx]
+            probs *= alt_weights[choicemask]
 
-        share_step = np.sum(probs[choiceidx == i])
+        share_step = np.sum(probs)
         deriv[i] = (share_step - base_shares[i]) / price_step
     
     return deriv
