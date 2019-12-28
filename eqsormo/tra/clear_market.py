@@ -17,12 +17,13 @@
 import numba
 import numpy as np
 from tqdm import tqdm
+from time import time
 
 from logging import getLogger
 LOG = getLogger(__name__)
 
 def clear_market (non_price_utilities, hhidx, choiceidx, supply, income, starting_price, price_income_transformation,
-        price_income_params, budget_coef, max_rent_to_income=None, convergence_criterion=1e-5, step=1e-2, maxiter=np.inf, weights=None):
+        price_income_params, budget_coef, max_rent_to_income=None, convergence_criterion=1e-4, step=1e-2, maxiter=np.inf, weights=None):
     '''
     Clear the market
 
@@ -71,8 +72,8 @@ def clear_market (non_price_utilities, hhidx, choiceidx, supply, income, startin
 
             excess_demand = shares - supply
 
-            maxdiff = np.max(np.abs(shares - supply))
-            #maxdiff = np.max(np.abs(excess_demand / supply))
+            #maxdiff = np.max(np.abs(shares - supply) / supply)
+            maxdiff = np.max(np.abs(excess_demand / supply))
             if maxdiff < convergence_criterion:
                 LOG.info(f'Prices converged after {itr} iterations')
                 return price
@@ -93,7 +94,7 @@ def clear_market (non_price_utilities, hhidx, choiceidx, supply, income, startin
             # loop to compute derivatives of budget. That can be done as a numpy vectorized operation
             alt_price = price[choiceidx]
             budget = price_income_transformation.apply(alt_income, alt_price, *price_income_params)
-            price_step = 0.01
+            price_step = 1e-8
             budget_step = price_income_transformation.apply(alt_income, alt_price + price_step, *price_income_params)
 
             # fix one price from changing
@@ -107,45 +108,88 @@ def clear_market (non_price_utilities, hhidx, choiceidx, supply, income, startin
             if not np.all(deriv < 0):
                 raise ValueError('some derivatives of price are nonnegative')
 
-            # this is 7.7a from the paper
-            price = price - excess_demand / deriv
+            # this is 7.7a from Tra's dissertation
+            price = price - (excess_demand / deriv)
 
             pbar.update()
 
-@numba.jit(nopython=True)
+#@numba.jit(nopython=True) seems to slow things down but I may just not be letting it warm up
 def compute_derivatives (price, alt_income, choiceidx, hhidx, non_price_utilities, budget, budget_step, price_step, budget_coef, base_shares, max_rent_to_income, weights):
     deriv = np.zeros_like(price)
 
-    sim_budget = np.copy(budget)
-    sim_price = np.copy(price[choiceidx])
+    alt_price = price[choiceidx]
+    sim_price = np.copy(alt_price)
+
+    base_utilities = non_price_utilities + budget_coef * budget
+    full_utilities = np.copy(base_utilities)
+    utility_step = budget_coef * (budget_step - budget)
+
+    # cache weights
+    if weights is not None:
+        alt_weights = weights[hhidx]
+
+    max_price = alt_income * max_rent_to_income 
 
     for i in range(len(price)):
-        sim_budget[:] = budget
-        sim_budget[choiceidx == i] = budget_step[choiceidx == i]
+        #startTime = time()
+        choicemask = choiceidx == i
+
+        #choicemaskTime = time()
 
         # only used in places where price exceeds budget
-        sim_price[:] = sim_price
-        sim_price[choiceidx == i] += price_step
+        sim_price[choicemask] += price_step
 
-        full_utilities = non_price_utilities + budget_coef * sim_budget
+        full_utilities[choicemask] += utility_step[choicemask] 
+        #copyTime = time()
+
         exp_utility = np.exp(full_utilities)
+        #expTime = time()
 
         if max_rent_to_income is not None:
             # setting expUtility to zero means choice probability will be 0, and choice will also not be added to the logsum
-            exp_utility[alt_income * max_rent_to_income <= sim_price] = 0
+            # This is equivalent to removing from the choice set
+            exp_utility[max_price <= sim_price] = 0
+
+        #exclTime = time()
 
         if not np.all(np.isfinite(exp_utility)):
             print('Not all exp(utilities) are finite (scaling?)')
-            return np.zeros((0, 0)) # will cause error, and hopefully someone will see message above - work around numba limitation on raising
+            return np.zeros(0) # will cause error, and hopefully someone will see message above - work around numba limitation on raising
+
+        #isfinTime = time()
 
         logsums = np.bincount(hhidx, weights=exp_utility)
-        probs = exp_utility / logsums[hhidx]
+        #logsumTime = time()
+
+        probs = exp_utility[choicemask] / logsums[hhidx[choicemask]]
+        #probTime = time()
 
         if weights is not None:
-            probs *= weights[hhidx]
+            probs *= alt_weights[choicemask]
 
-        share_step = np.sum(probs[choiceidx == i])
+        #weightTime = time()
+
+        share_step = np.sum(probs)
         deriv[i] = (share_step - base_shares[i]) / price_step
+
+        #shareTime = time()
+
+        # clean up
+        sim_price[choicemask] -= price_step
+        full_utilities[choicemask] = base_utilities[choicemask]
+        #copyTime2 = time()
+
+        # print(f'one derivative: {copyTime2 - startTime:.3f}s')
+        # print(f'  choice mask: {choicemaskTime - startTime:.3f}s')
+        # print(f'  copy time: {copyTime - choicemaskTime:.3f}s')
+        # print(f'  exp time: {expTime - copyTime}')
+        # print(f'  exclusion time: {exclTime - expTime:.3f}s')
+        # print(f'  isfinite time: {isfinTime - exclTime:.3f}s')
+        # print(f'  logsum time: {logsumTime - isfinTime:.3f}s')
+        # print(f'  probs time: {probTime - isfinTime:.3f}s')
+        # print(f'  weight time: {weightTime - probTime:.3f}s')
+        # print(f'  share time: {shareTime - weightTime:.3f}s')
+        # print(f'  cleanup time: {copyTime2 - shareTime:.3f}s')
     
     return deriv
     

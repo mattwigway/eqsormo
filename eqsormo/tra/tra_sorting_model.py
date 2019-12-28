@@ -20,7 +20,6 @@ import statsmodels.api as sm
 import pandas as pd
 import numpy as np
 import scipy.optimize, scipy.stats
-import linearmodels
 from tqdm import tqdm
 import pickle
 import datetime
@@ -217,7 +216,13 @@ class TraSortingModel(BaseSortingModel):
             raise ValueError('not all budgets are finite (check model._first_stage_data.budget)')
 
         # compute utilities
-        return np.dot(self._first_stage_data.values, coefs).reshape(-1)
+        utils = np.dot(self._first_stage_data.values, coefs).reshape(-1)
+
+        # add log of supply, which is the part of the ASC which reacts to changing market shares
+        # cache this
+        utils += np.log(self.unweighted_supply.loc[self._first_stage_data.index.get_level_values('choice')].values)
+        
+        return utils
         
     def fit_first_stage (self):
         LOG.info('fitting first stage')
@@ -304,6 +309,9 @@ class TraSortingModel(BaseSortingModel):
         # bit, the exp(utility) stays finite
 
         base_utility = np.dot(full_first_stage_data[coefs.index].values, coefs.values)
+
+        # add deterministic part of ASC based on market share
+        base_utility += np.log(self.weighted_supply.loc[full_first_stage_data.index.get_level_values('choice')].values)
 
         # compute these with weights. This should be okay because the unweighted estimates are consistent if the sampling is conditional
         # on the choices, and with all the other assumptions we're making we might as well make that one as well... we're not doing much with
@@ -392,7 +400,9 @@ class TraSortingModel(BaseSortingModel):
         hhidx = hh_xwalk.loc[full_first_stage_data.index.get_level_values('household')].values
 
         base_utility = np.dot(full_first_stage_data[coefs.index].values, coefs.values)
-        non_price_utilities = base_utility + self.first_stage_ascs.loc[choice_xwalk.index].values[choiceidx]
+        non_price_utilities = base_utility +\
+            self.first_stage_ascs.loc[choice_xwalk.index].values[choiceidx] +\
+            np.log(self.weighted_supply.loc[choice_xwalk.index].values[choiceidx])
 
         startTimeClear = time.clock()
         new_prices = clear_market(

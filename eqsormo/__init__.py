@@ -13,7 +13,7 @@
 #    limitations under the License.
 
 import logging
-from .sorting_model import SortingModel
+#from .sorting_model import SortingModel
 from .tra import TraSortingModel
 from . import tra
 
