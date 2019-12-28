@@ -108,7 +108,7 @@ def clear_market (non_price_utilities, hhidx, choiceidx, supply, income, startin
             if not np.all(deriv < 0):
                 raise ValueError('some derivatives of price are nonnegative')
 
-            # this is 7.7a from the paper, but scale to avoid oscillation
+            # this is 7.7a from Tra's dissertation
             price = price - (excess_demand / deriv)
 
             pbar.update()
