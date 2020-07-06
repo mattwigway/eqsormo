@@ -1,4 +1,4 @@
-#    Copyright 2019 Matthew Wigginton Conway
+#    Copyright 2019-2020 Matthew Wigginton Conway
 
 #    Licensed under the Apache License, Version 2.0 (the "License");
 #    you may not use this file except in compliance with the License.
@@ -85,14 +85,14 @@ class SortingModel(object):
 
     def fit (self):
         'Fit the whole model'
-        startTime = time.clock()
+        startTime = time.perf_counter()
         LOG.info('Fitting equilibrium sorting model')
         if self.alternatives is None:
             raise RuntimeError('Alternatives not yet created')
 
         self.fit_first_stage()
         self.fit_second_stage()
-        endTime = time.clock()
+        endTime = time.perf_counter()
         LOG.info(f'''
 Fitting sorting model took {endTime - startTime:.3f} seconds.
 Convergence:
@@ -101,7 +101,7 @@ Convergence:
 
     def create_alternatives (self):
         LOG.info('Creating alternatives')
-        startTime = time.clock()
+        startTime = time.perf_counter()
 
         self.fullAlternatives = pd.concat([self.altCharacteristics for i in range(len(self.hh))], keys=self.hh.index)
         self.fullAlternatives['chosen'] = False
@@ -120,7 +120,7 @@ Convergence:
         self.alternatives.drop(columns=['chosen'], inplace=True)
         self.fullAlternatives.drop(columns=['chosen'], inplace=True)
 
-        endTime = time.clock()
+        endTime = time.perf_counter()
         LOG.info(f'Created {len(self.alternatives)} alternatives for {len(self.hh)} in {endTime - startTime:.3f} seconds')
 
     def first_stage_utility (self, params, mean_indirect_utility):
@@ -153,7 +153,7 @@ Convergence:
         'Perform the first stage estimation'
         LOG.info('Performing first-stage estimation')
 
-        startTime = time.clock()
+        startTime = time.perf_counter()
 
         self.firstStageData = pd.DataFrame()
 
@@ -188,7 +188,7 @@ Convergence:
         self.mean_indirect_utility = self.compute_mean_indirect_utility(self.interaction_params)
         self.first_stage_converged = minResults.success
 
-        endTime = time.clock()
+        endTime = time.perf_counter()
         if self.first_stage_converged:
             LOG.info(f'First stage converged in {endTime - startTime:.3f} seconds: {minResults.message}')
         else:
@@ -198,7 +198,7 @@ Convergence:
         'Fit the instrumental variables portion of the model'
         LOG.info('Fitting second stage')
 
-        startTime = time.clock()
+        startTime = time.perf_counter()
 
         priceCoef = prevPriceCoef = self.initialPriceCoef
 
@@ -222,7 +222,7 @@ Convergence:
                 iter += 1
                 pbar.update()
                 if np.abs(priceCoef - prevPriceCoef) < 1e-6:
-                    endTime = time.clock()
+                    endTime = time.perf_counter()
                     LOG.info(f'Price coefficient converged in {endTime-startTime:.3f} seconds after {iter} iterations')
                     self.mean_params = self.second_stage_fit.params
                     self.mean_params_se = self.second_stage_fit.std_errors # NB these are wrong b/c they don't account for variation in theta

@@ -1,4 +1,4 @@
-#    Copyright 2019 Matthew Wigginton Conway
+#    Copyright 2019-2020 Matthew Wigginton Conway
 
 #    Licensed under the Apache License, Version 2.0 (the "License");
 #    you may not use this file except in compliance with the License.
@@ -65,7 +65,7 @@ class MNLFullASC(object):
 
         Uses a contraction mapping found in equation 16 of Bayer et al 2004.
         '''
-        startTime = time.clock()
+        startTime = time.perf_counter()
         if self._previous_ascs is not None:
             ascs = self._previous_ascs
         else:
@@ -74,7 +74,7 @@ class MNLFullASC(object):
         ascs = compute_ascs(baseUtilities, self.supply, self.hhidx, self.choiceidx, starting_values=ascs, convergence_criterion=self.asc_convergence_criterion)
         self._previous_ascs = ascs # speed convergence later
 
-        endTime = time.clock()
+        endTime = time.perf_counter()
         self.asc_time += (endTime - startTime)
         return ascs
 
@@ -107,7 +107,7 @@ class MNLFullASC(object):
 
     def fit (self):
         LOG.info('Fitting multinomial logit model')
-        startTime = time.clock()
+        startTime = time.perf_counter()
 
         # this is in fact the log likelihood at constants, because all ASCs are still estimated
         # Note that this is only true if starting values are all zeros
@@ -145,7 +145,7 @@ class MNLFullASC(object):
         self.ascs = self.compute_ascs(self.utility(minResults.x), minResults.x)
         self.converged = minResults.success
 
-        endTime = time.clock()
+        endTime = time.perf_counter()
         if self.converged:
             LOG.info(f'Multinomial logit model converged in {endTime - startTime:.3f} seconds: {minResults.message}')
         else:

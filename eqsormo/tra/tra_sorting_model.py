@@ -1,4 +1,4 @@
-#    Copyright 2019 Matthew Wigginton Conway
+#    Copyright 2019-2020 Matthew Wigginton Conway
 
 #    Licensed under the Apache License, Version 2.0 (the "License");
 #    you may not use this file except in compliance with the License.
@@ -170,7 +170,7 @@ class TraSortingModel(BaseSortingModel):
 
     def create_alternatives (self):
         LOG.info('Creating alternatives')
-        startTime = time.clock()
+        startTime = time.perf_counter()
 
         self.create_full_alternatives()
        
@@ -197,7 +197,7 @@ class TraSortingModel(BaseSortingModel):
 
         self.alternatives.index.rename(['household', 'choice'], inplace=True)
 
-        endTime = time.clock()
+        endTime = time.perf_counter()
         LOG.info(f'Created {len(self.alternatives)} alternatives for {len(self.household_attributes)} households in {endTime - startTime:.3f} seconds')
 
     def first_stage_utility (self, params):
@@ -316,7 +316,7 @@ class TraSortingModel(BaseSortingModel):
         # compute these with weights. This should be okay because the unweighted estimates are consistent if the sampling is conditional
         # on the choices, and with all the other assumptions we're making we might as well make that one as well... we're not doing much with
         # the second stage estimates anyhow
-        fullAscStartTime = time.clock()
+        fullAscStartTime = time.perf_counter()
 
         ascs = compute_ascs(
             base_utility,
@@ -326,21 +326,21 @@ class TraSortingModel(BaseSortingModel):
             starting_values=self.first_stage_fit.ascs,
             weights=self.weights.loc[hh_xwalk.index].values if self.weights is not None else None
         )
-        fullAscEndTime = time.clock()
+        fullAscEndTime = time.perf_counter()
 
         self.first_stage_ascs = pd.Series(ascs, index=choice_xwalk.index)
         LOG.info(f'Finding full ASCs took {fullAscEndTime - fullAscStartTime:.3f}s')
 
     def fit_second_stage (self):
         LOG.info('fitting second stage')
-        startTime = time.clock()
+        startTime = time.perf_counter()
         second_stage_exog = sm.add_constant(self.housing_attributes[self.second_stage_params])
         second_stage_endog = self.first_stage_ascs.reindex(second_stage_exog.index)
 
         mod = sm.OLS(second_stage_endog, second_stage_exog)
         self.second_stage_fit = mod.fit()
         self.type_shock = self.second_stage_fit.resid
-        endTime = time.clock()
+        endTime = time.perf_counter()
         LOG.info(f'Fit second stage in {endTime - startTime:.2f} seconds')
 
     def fit (self):
@@ -404,7 +404,7 @@ class TraSortingModel(BaseSortingModel):
             self.first_stage_ascs.loc[choice_xwalk.index].values[choiceidx] +\
             np.log(self.weighted_supply.loc[choice_xwalk.index].values[choiceidx])
 
-        startTimeClear = time.clock()
+        startTimeClear = time.perf_counter()
         new_prices = clear_market(
             non_price_utilities=non_price_utilities,
             hhidx=hhidx,
@@ -419,7 +419,7 @@ class TraSortingModel(BaseSortingModel):
             maxiter=maxiter,
             weights=self.weights.loc[hh_xwalk.index].values if self.weights is not None else None
         )
-        endTimeClear = time.clock()
+        endTimeClear = time.perf_counter()
 
         new_prices = pd.Series(new_prices, index=choice_xwalk.index)
 
