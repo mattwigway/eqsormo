@@ -212,13 +212,13 @@ class TraSortingModel(BaseSortingModel):
                     return x[:size]
 
             sampled_idxs = [i for maxm, offset in zip(n_unchosen_alternatives.values, np.cumsum(n_unchosen_alternatives.values))
-                for i in random_sel(maxm, self.sample_alternatives) + offset - maxm] # offset is _end_ of a particular household
+                for i in random_sel(maxm, self.sample_alternatives - 1) + offset - maxm] # offset is _end_ of a particular household
             
             self.alternatives = pd.concat([unchosenAlternatives.iloc[sampled_idxs], self.fullAlternatives[self.fullAlternatives.chosen]]).sort_index(level=[0, 1])
 
             # check our work
             n_sampled_alternatives = self.alternatives.groupby(level=0).size()
-            assert np.all(n_sampled_alternatives.reindex(n_unchosen_alternatives.index) == np.minimum(n_unchosen_alternatives, self.sample_alternatives) + 1)
+            assert np.all(n_sampled_alternatives.reindex(n_unchosen_alternatives.index) == np.minimum(n_unchosen_alternatives, self.sample_alternatives))
 
         self.alternatives.drop(columns=['chosen', 'hhchoice'], inplace=True)
         self.fullAlternatives.drop(columns=['chosen', 'hhchoice'], inplace=True)
