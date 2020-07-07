@@ -102,6 +102,9 @@ class TraSortingModel(BaseSortingModel):
         self.price_income_transformation = price_income_transformation
         self.method = method
         self.max_rent_to_income = max_rent_to_income
+
+        self._rng = np.random.default_rng()
+
         self.validate()
 
         self.creation_time = datetime.datetime.today()
@@ -154,19 +157,27 @@ class TraSortingModel(BaseSortingModel):
 
     def create_full_alternatives (self):
         # TODO re-run after un-pickling
-        self.fullAlternatives = pd.concat([self.housing_attributes for i in range(len(self.household_attributes))], keys=self.household_attributes.index)
-        self.fullAlternatives.index.rename(['household', 'choice'], inplace=True)
         self.household_attributes.index.rename('household', inplace=True)
-        self.fullAlternatives = self.fullAlternatives.join(self.household_attributes, on='household')
-        self.fullAlternatives = self.fullAlternatives.join(pd.DataFrame(self.price.rename('price')), on='choice')
-        self.fullAlternatives = self.fullAlternatives.join(pd.DataFrame(self.income.rename('income')), on='household')
+        self.housing_attributes.index.rename('choice', inplace=True)
+        housing_attributes = self.housing_attributes.copy()
+        household_attributes = self.household_attributes.copy()
+        household_attributes['income'] = self.income.reindex(self.household_attributes.index)
+        household_attributes['hhchoice'] = self.choice.reindex(self.household_attributes.index)
+        housing_attributes['price'] = self.price.reindex(self.housing_attributes.index)
+        self.fullAlternatives = household_attributes.reset_index().assign(key=1).merge(housing_attributes.reset_index().assign(key=1), on='key')\
+            .drop(columns=['key']).set_index(['household', 'choice'])
+
+        #self.fullAlternatives = pd.concat([self.housing_attributes for i in range(len(self.household_attributes))], keys=self.household_attributes.index)
+        #self.fullAlternatives.index.rename(['household', 'choice'], inplace=True)
+        #self.fullAlternatives = self.fullAlternatives.join(self.household_attributes, on='household')
+        # self.fullAlternatives = self.fullAlternatives.join(pd.DataFrame(self.price.rename('price')), on='choice')
+        # self.fullAlternatives = self.fullAlternatives.join(pd.DataFrame(self.income.rename('income')), on='household')
         self.fullAlternatives['chosen'] = False
-        self.fullAlternatives['hhchoice'] = self.choice.reindex(self.fullAlternatives.index, level=0)
+        # self.fullAlternatives['hhchoice'] = self.choice.reindex(self.fullAlternatives.index, level=0)
         self.fullAlternatives.loc[self.fullAlternatives.index.get_level_values(1) == self.fullAlternatives.hhchoice, 'chosen'] = True
 
         if self.household_housing_attributes is not None:
             self.fullAlternatives = self.fullAlternatives.join(self.household_housing_attributes)
-
 
     def create_alternatives (self):
         LOG.info('Creating alternatives')
@@ -188,9 +199,26 @@ class TraSortingModel(BaseSortingModel):
             else:
                 candidateAlternatives = self.fullAlternatives[self.fullAlternatives.income * self.max_rent_to_income > self.fullAlternatives.price]
 
-            unchosenAlternatives = candidateAlternatives[~candidateAlternatives.chosen].groupby(level=0).apply(lambda x: x.sample(self.sample_alternatives - 1) if len(x) >= self.sample_alternatives else x)
-            unchosenAlternatives.index = unchosenAlternatives.index.droplevel(0) # fix dup'd household level due to groupby
-            self.alternatives = pd.concat([unchosenAlternatives, self.fullAlternatives[self.fullAlternatives.chosen]]).sort_index(level=[0, 1])
+            # doing this with numpy indexing is a lot faster than the previous groupby().apply(lambda x: x.sample()) method
+            unchosenAlternatives = candidateAlternatives[~candidateAlternatives.chosen].sort_index(level=[0, 1])
+            n_unchosen_alternatives = unchosenAlternatives.groupby(level=0).size()
+
+            def random_sel (maxm, size):
+                if size >= maxm:
+                    return np.arange(maxm)
+                else:
+                    x = np.arange(maxm)
+                    self._rng.shuffle(x)
+                    return x[:size]
+
+            sampled_idxs = [i for maxm, offset in zip(n_unchosen_alternatives.values, np.cumsum(n_unchosen_alternatives.values))
+                for i in random_sel(maxm, self.sample_alternatives) + offset - maxm] # offset is _end_ of a particular household
+            
+            self.alternatives = pd.concat([unchosenAlternatives.iloc[sampled_idxs], self.fullAlternatives[self.fullAlternatives.chosen]]).sort_index(level=[0, 1])
+
+            # check our work
+            n_sampled_alternatives = self.alternatives.groupby(level=0).size()
+            assert np.all(n_sampled_alternatives.reindex(n_unchosen_alternatives.index) == np.minimum(n_unchosen_alternatives, self.sample_alternatives) + 1)
 
         self.alternatives.drop(columns=['chosen', 'hhchoice'], inplace=True)
         self.fullAlternatives.drop(columns=['chosen', 'hhchoice'], inplace=True)
