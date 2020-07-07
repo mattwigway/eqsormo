@@ -167,13 +167,7 @@ class TraSortingModel(BaseSortingModel):
         self.fullAlternatives = household_attributes.reset_index().assign(key=1).merge(housing_attributes.reset_index().assign(key=1), on='key')\
             .drop(columns=['key']).set_index(['household', 'choice'])
 
-        #self.fullAlternatives = pd.concat([self.housing_attributes for i in range(len(self.household_attributes))], keys=self.household_attributes.index)
-        #self.fullAlternatives.index.rename(['household', 'choice'], inplace=True)
-        #self.fullAlternatives = self.fullAlternatives.join(self.household_attributes, on='household')
-        # self.fullAlternatives = self.fullAlternatives.join(pd.DataFrame(self.price.rename('price')), on='choice')
-        # self.fullAlternatives = self.fullAlternatives.join(pd.DataFrame(self.income.rename('income')), on='household')
         self.fullAlternatives['chosen'] = False
-        # self.fullAlternatives['hhchoice'] = self.choice.reindex(self.fullAlternatives.index, level=0)
         self.fullAlternatives.loc[self.fullAlternatives.index.get_level_values(1) == self.fullAlternatives.hhchoice, 'chosen'] = True
 
         if self.household_housing_attributes is not None:
@@ -218,7 +212,7 @@ class TraSortingModel(BaseSortingModel):
 
             # check our work
             n_sampled_alternatives = self.alternatives.groupby(level=0).size()
-            assert np.all(n_sampled_alternatives.reindex(n_unchosen_alternatives.index) == np.minimum(n_unchosen_alternatives, self.sample_alternatives))
+            assert np.all(n_sampled_alternatives.reindex(n_unchosen_alternatives.index) == np.minimum(n_unchosen_alternatives + 1, self.sample_alternatives))
 
         self.alternatives.drop(columns=['chosen', 'hhchoice'], inplace=True)
         self.fullAlternatives.drop(columns=['chosen', 'hhchoice'], inplace=True)
