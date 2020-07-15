@@ -39,8 +39,11 @@ class MNLFullASC(object):
         :param utility: Function that returns utility for all choice alternatives and decisionmakers for a given set of parameters, not including ASCs. Receives parameters as a numpy array. Should return a MultiIndexed-pandas dataframe with indices called 'decisionmaker' and 'choice'
         :type utility: function
 
-        :param supply: Supply of each choice in equilibrium
-        :type supply: Pandas series, indexed with choice alternatives (like return value of utility function)
+        :param supply: List of supply of each choice in equilibrium, for each choice margin (choice margins may be simple or joint)
+        :type supply: List of np.array
+
+        :param choiceidx: List of arrays of what choice a particular utility is for, on each margin
+        :type choiceidx: List of np.array
 
         :param starting_values: starting values for parameters
         :type starting_values: numpy array
@@ -59,19 +62,15 @@ class MNLFullASC(object):
         self.choiceidx = choiceidx
         self.chosen = chosen
 
-    def compute_ascs (self, baseUtilities, params):
+    def compute_ascs (self, base_utilities):
         '''
-        Compute alternative specific constants implied by params.
+        Compute alternative specific constants implied by base_utilities.
 
         Uses a contraction mapping found in equation 16 of Bayer et al 2004.
         '''
         startTime = time.perf_counter()
-        if self._previous_ascs is not None:
-            ascs = self._previous_ascs
-        else:
-            ascs = np.zeros(self.choiceidx.max() + 1)
 
-        ascs = compute_ascs(baseUtilities, self.supply, self.hhidx, self.choiceidx, starting_values=ascs, convergence_criterion=self.asc_convergence_criterion)
+        ascs = compute_ascs(base_utilities, self.supply, self.hhidx, self.choiceidx, starting_values=self._previous_ascs, convergence_criterion=self.asc_convergence_criterion)
         self._previous_ascs = ascs # speed convergence later
 
         endTime = time.perf_counter()
@@ -80,20 +79,21 @@ class MNLFullASC(object):
 
     def full_utility (self, params):
         'Full utilities including ASCs'
-        baseUtilities = self.utility(params)
-        ascs = self.compute_ascs(baseUtilities, params)
-        if len(ascs) == 1: # after error in underlying compute_ascs step
-            print(params)
-        fullUtilities = baseUtilities + ascs[self.choiceidx]
-        return fullUtilities
+        base_utilities = self.utility(params)
+        ascs = self.compute_ascs(base_utilities)
+        full_utilities = base_utilities
+        for margin in range(len(ascs)):
+            # okay to use += here, base utilities will not be used again
+            full_utilities += ascs[margin][self.choiceidx[margin]]
+        return full_utilities
 
     def probabilities (self, params):
         utility = self.full_utility(params)
-        expUtility = np.exp(utility)
-        if not np.all(np.isfinite(expUtility)):
-            raise ValueError('Household/choice combinations ' + str(expUtility.index[~np.isfinite(expUtility)]) + ' have non-finite utilities!')
-        logsums = np.bincount(self.hhidx, weights=expUtility)
-        return expUtility / logsums[self.hhidx]
+        exp_utility = np.exp(utility)
+        if not np.all(np.isfinite(exp_utility)):
+            raise ValueError('Household/choice combinations ' + str(exp_utility.index[~np.isfinite(exp_utility)]) + ' have non-finite utilities!')
+        logsums = np.bincount(self.hhidx, weights=exp_utility)
+        return exp_utility / logsums[self.hhidx]
 
     def choice_probabilities (self, params):
         probabilities = self.probabilities(params)
@@ -114,7 +114,6 @@ class MNLFullASC(object):
         if not np.allclose(self.starting_values, 0):
             LOG.warn('not all starting values are zero, log likelihood at constants is actually log likelihood at starting values and may be incorrect')
         self.loglik_constants = -self.negative_log_likelihood(self.starting_values)
-
 
         minResults = scipy.optimize.minimize(
             self.negative_log_likelihood,
@@ -142,7 +141,7 @@ class MNLFullASC(object):
         self.pvalues = scipy.stats.norm.cdf(1 - np.abs(self.zvalues))
 
         # TODO robust SEs
-        self.ascs = self.compute_ascs(self.utility(minResults.x), minResults.x)
+        self.ascs = self.compute_ascs(self.utility(minResults.x))
         self.converged = minResults.success
 
         endTime = time.perf_counter()
@@ -151,7 +150,6 @@ class MNLFullASC(object):
         else:
             LOG.error(f'Multinomial logit model FAILED TO CONVERGE in {endTime - startTime:.3f} seconds: {minResults.message}')
         LOG.info(f'  Finding ASCs took {self.asc_time:.3f} seconds')
-
 
     def summary (self):
         summ = pd.DataFrame({
