@@ -27,7 +27,7 @@ import datetime
 from . import price_income
 from .clear_market import clear_market
 from eqsormo.common import BaseSortingModel, MNLFullASC
-from eqsormo.common.util import human_bytes
+from eqsormo.common.util import human_bytes, human_time, human_shape
 from eqsormo.common.compute_ascs import compute_ascs
 import eqsormo
 
@@ -45,7 +45,7 @@ class TraSortingModel(BaseSortingModel):
     '''
 
     def __init__ (self, housing_attributes, household_attributes,  interactions, unequilibrated_hh_params, unequilibrated_hsg_params, second_stage_params, price, income, choice, unequilibrated_choice, price_income_transformation=price_income.logdiff,
-            price_income_starting_values=[], sample_alternatives=None, method='L-BFGS-B', max_rent_to_income=None, household_housing_attributes=None, weights=None):
+            price_income_starting_values=[], sample_alternatives=None, method='L-BFGS-B', max_rent_to_income=None, household_housing_attributes=None, weights=None, max_chunk_bytes=2e9):
         '''
         Initialize a Tra sorting model
 
@@ -80,6 +80,12 @@ class TraSortingModel(BaseSortingModel):
 
         :param max_rent_to_income: Maximum proportion of income rent can be for the alternative to be included in the choice set - in (0, 1] if the price/income transformation can't handle income less than rent
         :type max_rent_to_income: float or None
+
+        :param max_chunk_bytes: Maximum number of bytes to use for a single chunk of the full alternatives array. The most memory-constrained part of the alogorithm
+        is clearing the market, which requires computing the dot product of a n_households x n_housing_alternatives * n_unequilibrated_alternatives array and a coefficients
+        array. However, since the coefficients array is a column vector, we can compute the product of chunks of the full alternatives array and the column vector, then concatenate.
+        This tuning parameter controls how large these chunks are in bytes. Default 2GB.
+        :type max_chunk_bytes: int
         '''
         self.housing_attributes = housing_attributes
         self.household_attributes = household_attributes
@@ -94,6 +100,7 @@ class TraSortingModel(BaseSortingModel):
         self.unequilibrated_hh_params = unequilibrated_hh_params
         self.unequilibrated_hsg_params = unequilibrated_hsg_params
         self.sample_alternatives = sample_alternatives
+        self.alternatives_stds = None
         
         if weights is None:
             self.weights = None
@@ -104,6 +111,7 @@ class TraSortingModel(BaseSortingModel):
         self.price_income_starting_values = price_income_starting_values
         self.method = method
         self.max_rent_to_income = max_rent_to_income
+        self.max_chunk_bytes = max_chunk_bytes
 
         self._rng = np.random.default_rng()
 
@@ -157,42 +165,33 @@ class TraSortingModel(BaseSortingModel):
         else:
             raise ValueError('Some validation checks failed (see log messages)')
 
-    def create_full_alternatives (self):
+    def materialize_alternatives (self, hhidx, choiceidx, uneqchoiceidx):
+        '''
+        Materialize the alternatives for hhidx, choiceidx, and uneqchoiceidx, and return them.
+
+        These should be formatted like so, with hhidx changing slowest and uneqchoiceidx changing fastest.
+        if there are three households, three housing choices, and three unequilibrated choices:
+        hhidx:         0 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 1 2 2 2 2 2 2 2 2 2
+        choiceidx:     0 0 0 1 1 1 2 2 2 0 0 0 1 1 1 2 2 2 0 0 0 1 1 1 2 2 2
+        uneqchoiceidx: 0 1 2 0 1 2 0 1 2 0 1 2 0 1 2 0 1 2 0 1 2 0 1 2 0 1 2
+
+        It is okay if they are not sequential, but they should be monotonically increasing.
+        '''
         start_time = time.perf_counter()
-        # convert everything into numpy arrays for performance and memory use
-        self.housing_xwalk = pd.Series(np.arange(len(self.housing_attributes)), index=self.housing_attributes.index)
-
-        # we always have an unequilibrated choice to simplify coding, it is just only a single choice if not specifice
-        # good ol' mononomial logit model
-        unequilibrated_choice = self.unequilibrated_choice.copy() if self.unequilibrated_choice is not None else pd.Series(np.zeros(len(choice), index=choice.index))
-        unique_unequilibrated_choices = unequilibrated_choice.unique()
-        self.unequilibrated_choice_xwalk = pd.Series(np.arange(len(unique_unequilibrated_choices)), index=unique_unequilibrated_choices)
-        self.hh_xwalk = pd.Series(np.arange(len(self.household_attributes)), index=self.household_attributes.index)
-
-        self.hh_hsg_choice = self.housing_xwalk.loc[self.choice.loc[self.hh_xwalk.index]]
-        self.hh_unequilibrated_choice = self.unequilibrated_choice_xwalk.loc[self.unequilibrated_choice.loc[self.hh_xwalk.index]]
-
-        # index of each household in the full alternatives dataset
-        # repeated for each alternative (housing choice)
-        # so if there are three households, three housing choices, and three unequilibrated choices:
-        # hhidx:         0 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 1 2 2 2 2 2 2 2 2 2
-        # choiceidx:     0 0 0 1 1 1 2 2 2 0 0 0 1 1 1 2 2 2 0 0 0 1 1 1 2 2 2
-        # uneqchoiceidx: 0 1 2 0 1 2 0 1 2 0 1 2 0 1 2 0 1 2 0 1 2 0 1 2 0 1 2
-        # NB this could also be conceptualized as a four-dimensional array (household * housing choice * unequilibrated choice * variables)
-        # but, uh, let's not
-        hhidx = np.repeat(np.arange(len(self.household_attributes)), len(self.housing_attributes) * len(unique_unequilibrated_choices))
-        choiceidx = np.repeat(np.tile(np.arange(len(self.housing_attributes)), len(self.household_attributes)), len(unique_unequilibrated_choices))
-        uneqchoiceidx = np.tile(np.arange(len(unique_unequilibrated_choices)), len(self.housing_attributes) * len(self.household_attributes))
 
         assert len(hhidx) == len(choiceidx) and len(choiceidx) == len(uneqchoiceidx)
+
+        LOG.info(f'materializing {len(hhidx)} choices')
 
         # first, create data for the interactions
         colnames = []
 
         # + 1 for budget param
-        ncols = len(self.interactions) + len(self.unequilibrated_hh_params) + len(self.unequilibrated_hsg_params) + 1
+        ncols = len(self.interactions) + (len(self.unequilibrated_hh_params) +\
+            len(self.unequilibrated_hsg_params)) * (len(self.unequilibrated_choice_xwalk) - 1) +\
+                 1
         LOG.info(f'Allocating full alternatives array of size {human_bytes(len(hhidx) * ncols * 8)}')
-        self.full_alternatives = np.zeros((len(hhidx), ncols))
+        alternatives = np.zeros((len(hhidx), ncols))
 
         # budget is first column, to make updates easier
         current_col = 0
@@ -209,12 +208,12 @@ class TraSortingModel(BaseSortingModel):
         
         budget = np.full(len(hhidx), np.nan)
         budget[feasible_alts] = self.price_income_transformation.apply(alt_income[feasible_alts], alt_price[feasible_alts], *self.price_income_starting_values)
-        self.full_alternatives[:,current_col] = budget
+        alternatives[:,current_col] = budget
         current_col += 1
         del alt_income, alt_price, budget # save memory
 
         for hh_attr, hsg_attr in self.interactions:
-            self.full_alternatives[:,current_col] =\
+            alternatives[:,current_col] =\
                 self.household_attributes[hh_attr].astype('float64').values[hhidx] * self.housing_attributes[hsg_attr].astype('float64').values[choiceidx]
             colnames.append(f'{hh_attr}:{hsg_attr}')
             current_col += 1
@@ -222,79 +221,96 @@ class TraSortingModel(BaseSortingModel):
         # now add the attributes for the unequilibrated choice
         for param in self.unequilibrated_hh_params:
             vals = self.household_attributes[param].astype('float64').values[hhidx]
-            for uneqchoice in range(len(unique_unequilibrated_choices)):
+            for uneqchoice in range(1, len(self.unequilibrated_choice_xwalk)):
                 # fill all rows that are not for this unequilibrated choice with 0s
-                self.full_alternatives[:,current_col] = np.choose(uneqchoiceidx == uneqchoice, [0, vals])
+                alternatives[:,current_col] = np.choose(uneqchoiceidx == uneqchoice, [0, vals])
                 colnames.append(f'{param}:uneq_choice_{self.unequilibrated_choice_xwalk[self.unequilibrated_choice_xwalk == uneqchoice].index[0]}')
                 current_col += 1
 
         for param in self.unequilibrated_hsg_params:
             vals = self.housing_attributes[param].astype('float64').values[choiceidx]
-            for uneqchoice in range(len(unique_unequilibrated_choices)):
+            for uneqchoice in range(1, len(self.unequilibrated_choice_xwalk)):
                 # fill all rows that are not for this unequilibrated choice with 0s
-                self.full_alternatives[:,current_col] = np.choose(uneqchoiceidx == uneqchoice, [0, vals])
+                alternatives[:,current_col] = np.choose(uneqchoiceidx == uneqchoice, [0, vals])
                 colnames.append(f'{param}:uneq_choice_{self.unequilibrated_choice_xwalk[self.unequilibrated_choice_xwalk == uneqchoice].index[0]}')
                 current_col += 1
 
-        # TODO household housing attributes
+        total_time = time.perf_counter() - start_time
+        LOG.info(f'Materialized alternatives into {human_shape(alternatives.shape)} array using {human_bytes(alternatives.nbytes)} in {human_time(total_time)}')
+        self.alternatives_colnames = colnames # hacky to set this every time but it never changes
+
+        if self.alternatives_stds is None:
+            self.alternatives_stds = np.std(alternatives)
         
-        self.full_alternatives = np.column_stack(cols)
-        self.full_alternatives_colnames = colnames
-        self.full_alternatives_hhidx = hhidx
-        self.full_alternatives_choiceidx = choiceidx
-        self.full_alternatives_uneqchoiceidx = uneqchoiceidx
-        self.full_alternatives_hsgchosen = (self.hh_hsg_choice[hhidx] == choiceidx) 
-        self.full_alternatives_uneqchosen = (self.hh_unequilibrated_choice[hhidx] == uneqchoiceidx)
-        self.full_alternatives_chosen = self.full_alternatives_hsgchosen & self.full_alternatives_uneqchosen
+        alternatives /= self.alternatives_stds
 
-        # note that because data have been stacked, these STDs may not be perfectly correct
-        # that's okay, they're just scaling factors to promote model convergence, and will be reversed
-        # after the fitting process
-        self.full_alternatives_stds = np.std(self.full_alternatives, axis=0)
-
-        # scale
-        self.full_alternatives = self.full_alternatives / self.full_alternatives_stds
-        LOG.info(f'Creating full alternatives took {time.perf_counter() - start_time:.3f} seconds')
-        LOG.info(f'Full alternatives dimensions: {"x".join(self.full_alternatives.shape)}')
-        LOG.info(f'Full alternatives use {human_bytes(self.full_alternatives.nbytes)} memory')
+        return alternatives
 
     def create_alternatives (self):
         LOG.info('Creating alternatives')
         startTime = time.perf_counter()
 
-        self.create_full_alternatives()
-       
+        LOG.info('Converting pandas data to numpy')
+        self.housing_xwalk = pd.Series(np.arange(len(self.housing_attributes)), index=self.housing_attributes.index)
+
+        # we always have an unequilibrated choice to simplify coding, it is just only a single choice if not specifice
+        # good ol' mononomial logit model
+        unequilibrated_choice = self.unequilibrated_choice.copy() if self.unequilibrated_choice is not None else pd.Series(np.zeros(len(choice), index=choice.index))
+        unique_unequilibrated_choices = unequilibrated_choice.unique()
+        self.unequilibrated_choice_xwalk = pd.Series(np.arange(len(unique_unequilibrated_choices)), index=unique_unequilibrated_choices)
+        self.hh_xwalk = pd.Series(np.arange(len(self.household_attributes)), index=self.household_attributes.index)
+
+        self.hh_hsg_choice = self.housing_xwalk.loc[self.choice.loc[self.hh_xwalk.index]].values
+        self.hh_unequilibrated_choice = self.unequilibrated_choice_xwalk.loc[self.unequilibrated_choice.loc[self.hh_xwalk.index]].values
+
+        # index of each household in the full alternatives dataset
+        # repeated for each alternative (housing choice)
+        # so if there are three households, three housing choices, and three unequilibrated choices:
+        # hhidx:         0 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 1 2 2 2 2 2 2 2 2 2
+        # choiceidx:     0 0 0 1 1 1 2 2 2 0 0 0 1 1 1 2 2 2 0 0 0 1 1 1 2 2 2
+        # uneqchoiceidx: 0 1 2 0 1 2 0 1 2 0 1 2 0 1 2 0 1 2 0 1 2 0 1 2 0 1 2
+        # NB this could also be conceptualized as a four-dimensional array (household * housing choice * unequilibrated choice * variables)
+        # but, uh, let's not
+        LOG.info('Indexing full alternatives dataset')
+        self.full_hhidx = np.repeat(np.arange(len(self.household_attributes)), len(self.housing_attributes) * len(unique_unequilibrated_choices))
+        self.full_choiceidx = np.repeat(np.tile(np.arange(len(self.housing_attributes)), len(self.household_attributes)), len(unique_unequilibrated_choices))
+        self.full_uneqchoiceidx = np.tile(np.arange(len(unique_unequilibrated_choices)), len(self.housing_attributes) * len(self.household_attributes))
+        self.full_hsgchosen = (self.hh_hsg_choice[self.full_hhidx] == self.full_choiceidx) 
+        self.full_uneqchosen = (self.hh_unequilibrated_choice[self.full_hhidx] == self.full_uneqchoiceidx)
+        self.full_chosen = self.full_hsgchosen & self.full_uneqchosen
+
         if self.sample_alternatives <= 0 or self.sample_alternatives is None:
             if self.max_rent_to_income is None:
-                self.alternatives = self.full_alternatives
-                self.alternatives_hhidx = self.full_alternatives_hhidx
-                self.alternatives_choiceidx = self.full_alternatives_choiceidx
-                self.alternatives_uneqchoiceidx = self.full_alternatives_uneqchoiceidx
-                self.alternatives_hsgchosen = self.full_alternatives_hsgchosen
-                self.alternatives_uneqchosen = self.full_alternatives_uneqchosen
-                self.alternatives_chosen = self.full_alternatives_chosen
+                self.alternatives = self.materialize_alternatives(self.full_hhidx, self.full_choiceidx, self.full_uneqchoiceidx)
+                self.alternatives_hhidx = self.full_hhidx
+                self.alternatives_choiceidx = self.full_choiceidx
+                self.alternatives_uneqchoiceidx = self.full_uneqchoiceidx
+                self.alternatives_hsgchosen = self.full_hsgchosen
+                self.alternatives_uneqchosen = self.full_uneqchosen
+                self.alternatives_chosen = self.full_chosen
             else:
                 # TODO
                 raise ValueError('max_rent_to_income with no sampling is unimplemented')
 
         else:
+            LOG.info('Sampling alternatives')
             if self.max_rent_to_income is None:
                 # note that we do not include the other unequilibrated choises for the chosen housing unit here, so they are not selected
                 # randomly. We are randomly sampling housing alternatives, but always use all unequilibrated alternatives.
-                feasible_unchosen_alts = ~self.full_alternatives_hsgchosen
+                feasible_unchosen_alts = ~self.full_hsgchosen
             else:
-                feasible_unchosen_alts = (self.income.astype('float64').values[self.full_alternatives_hhidx] * self.max_rent_to_income >\
-                    self.price.astype('float64').values[self.full_alternatives_choiceidx]) & ~self.full_alternatives_hsgchosen
+                feasible_unchosen_alts = (self.income.astype('float64').values[self.full_hhidx] * self.max_rent_to_income >\
+                    self.price.astype('float64').values[self.full_choiceidx]) & ~self.full_hsgchosen
 
             # unequilibrated alternatives are not sampled
-            n_housing_alts_per_hh = np.binsum(self.full_alternatives_hhidx[feasible_unchosen_alts]) / len(self.unequilibrated_choice_xwalk)
+            n_housing_alts_per_hh = np.bincount(self.full_hhidx[feasible_unchosen_alts]) / len(self.unequilibrated_choice_xwalk)
 
             def random_sel (n):
                 if n <= self.sample_alternatives - 1:
                     return np.repeat([True], n)
                 else:
                     ret = np.arange(n) < self.sample_alternatives - 1
-                    self._rng.shuffle(n)
+                    self._rng.shuffle(ret)
                     return ret
 
             # since households are the outermost index, and unequilibrated choices are the innermost index, we can get away with this
@@ -305,24 +321,25 @@ class TraSortingModel(BaseSortingModel):
                 for n in n_housing_alts_per_hh
             ])
 
-            unchosen_sampled_idxs = np.arange(self.full_alternatives.shape[0])[feasible_unchosen_alts][sampled_mask]
-            chosen_idxs = np.arange(self.full_alternatives.shape[0])[self.full_alternatives_hsgchosen] # we do not sample uneq alternatives
+            unchosen_sampled_idxs = np.arange(len(self.full_hhidx))[feasible_unchosen_alts][sampled_mask]
+            del sampled_mask
+            chosen_idxs = np.arange(len(self.full_hhidx))[self.full_hsgchosen] # we do not sample uneq alternatives
 
             sampled_idxs = np.concatenate([unchosen_sampled_idxs, chosen_idxs])
             # put them back in the household > housing > uneq order
             np.sort(sampled_idxs)
 
-            self.alternatives = self.full_alternatives[sampled_idxs,:]
-            self.alternatives_hhidx = self.full_alternatives_hhidx[sampled_idxs]
-            self.alternatives_choiceidx = self.full_alternatives_choiceidx[sampled_idxs]
-            self.alternatives_uneqchoiceidx = self.full_alternatives_uneqchoiceidx[sampled_idxs]
-            self.alternatives_hsgchosen = self.full_alternatives_hsgchosen[sampled_idxs]
-            self.alternatives_uneqchosen = self.full_alternatives_uneqchosen[sampled_idxs]
-            self.alternatives_chosen = self.full_alternatives_chosen[sampled_idxs]
+            self.alternatives_hhidx = self.full_hhidx[sampled_idxs]
+            self.alternatives_choiceidx = self.full_choiceidx[sampled_idxs]
+            self.alternatives_uneqchoiceidx = self.full_uneqchoiceidx[sampled_idxs]
+            self.alternatives_hsgchosen = self.full_hsgchosen[sampled_idxs]
+            self.alternatives_uneqchosen = self.full_uneqchosen[sampled_idxs]
+            self.alternatives_chosen = self.full_chosen[sampled_idxs]
+            self.alternatives = self.materialize_alternatives(self.alternatives_hhidx, self.alternatives_choiceidx, self.alternatives_uneqchoiceidx)
 
         endTime = time.perf_counter()
         LOG.info(f'Created alternatives for {len(self.household_attributes)} households in {endTime - startTime:.3f} seconds')
-        LOG.info(f'Alternatives dimensions: {"x".join(self.alternatives.shape)}')
+        LOG.info(f'Alternatives dimensions: {human_shape(self.alternatives.shape)}')
         LOG.info(f'Alternatives use {human_bytes(self.alternatives.nbytes)} memory')
 
     def first_stage_utility (self, params):
@@ -347,7 +364,8 @@ class TraSortingModel(BaseSortingModel):
         utils = np.dot(self.alternatives, coefs).reshape(-1)
 
         # add log of supply, which is the part of the ASC which reacts to changing market shares
-        # unequilibrated alternatives do not 
+        # unequilibrated alternatives do not
+        # TODO could move this calculation into MNLFullASC
         utils += self._log_supply
         
         return utils
@@ -359,15 +377,15 @@ class TraSortingModel(BaseSortingModel):
 
         self.first_stage_fit = MNLFullASC(
             utility=self.first_stage_utility,
-            choiceidx=[self.alternatives_choiceidx, self.alternatives_uneqchoiceidx],
+            choiceidx=(self.alternatives_choiceidx, self.alternatives_uneqchoiceidx),
             hhidx=self.alternatives_hhidx,
             chosen=self.alternatives_chosen,
-            supply=[
+            supply=(
                 np.bincount(self.hh_hsg_choice),
                 np.bincount(self.hh_unequilibrated_choice)
-            ],
+            ),
             starting_values=np.concatenate([np.zeros(self.alternatives.shape[1]), self.price_income_transformation.starting_values]),
-            param_names=[*self.full_alternatives_colnames, *self.price_income_transformation.param_names],
+            param_names=[*self.alternatives_colnames, *self.price_income_transformation.param_names],
             method=self.method
         )
 
@@ -382,37 +400,52 @@ class TraSortingModel(BaseSortingModel):
         # so we lose some efficiency - but we can estimate the ASCs without alternative sampling, so we don't lose the efficiency there.
 
         if self.max_rent_to_income is None:
-            feasible_alts = np.repeat([True], self.full_alternatives.shape[0])
+            feasible_alts = np.full(True, len(self.full_hhidx))
         else:
-            feasible_alts = (self.income.astype('float64').values[self.full_alternatives_hhidx] * self.max_rent_to_income >\
-                self.price.astype('float64').values[self.full_alternatives_choiceidx])
+            feasible_alts = (self.income.astype('float64').values[self.full_hhidx] * self.max_rent_to_income >\
+                self.price.astype('float64').values[self.full_choiceidx])
 
         coefs = self.first_stage_fit.params.values[:-self.price_income_transformation.n_params]
-        base_utility = np.dot(self.full_alternatives[feasible_alts], coefs)
 
-        # add deterministic part of ASC based on market share
-        weighted_supply = np.bincount(self.hh_hsg_choice, self.weights.values)
-        base_utility += np.log(weighted_supply)[self.full_alternatives_choiceidx]
+        # compute utility in blocks to save memory. we can do this because we don't actually need to materialize the full_alternatives matrix
+        # to cumpute the utility - and in the base case, the full alternatives matrix is 67 GB. Instead, we materialize chunks, compute the dot
+        # product with the coefs for those alternatives, and iteratively update
+        base_utility = np.full(len(self.full_hhidx), np.nan)
+        chunk_rows = int(np.floor(self.max_chunk_bytes / len(self.alternative_colnames) / 8)) # bytes per float64
+
+        LOG.info(f'Computing full utilities using {len(self.full_hhidx) // chunk_rows + 1} chunks of {chunk_rows} rows each ({human_bytes(chunk_rows * len(self.alternative_colnames) * 8)} each)')
+
+        fullAscStartTime = time.perf_counter()
 
         # compute these with weights. This should be okay because the unweighted estimates are consistent if the sampling is conditional
         # on the choices, and with all the other assumptions we're making we might as well make that one as well... we're not doing much with
         # the second stage estimates anyhow
-        fullAscStartTime = time.perf_counter()
+        weighted_supply = np.bincount(self.hh_hsg_choice, self.weights.values)
+        for chunk_start in range(0, len(self.full_hhidx), chunk_rows):
+            chunk_end = min(chunk_start + chunk_rows, len(self.full_hhidx))
+            chunk_alts = self.materialize_alternatives(
+                self.full_hhidx[chunk_start:chunk_end],
+                self.full_choiceidx[chunk_start:chunk_end],
+                self.full_uneqchoiceidx[chunk_start:chunk_end]
+            )
+            # add systematic utility and deterministic part of ASC based on market share
+            base_utility[chunk_start:chunk_end] = np.dot(chunk_alts, coefs) +\
+                np.log(weighted_supply)[self.full_choiceidx[chunk_start:chunk_end]]
 
         ascs = compute_ascs(
-            base_utilities=base_utility,
-            supply=[
+            base_utilities=base_utility[feasible_alts],
+            supply=(
                 # of homes
                 weighted_supply,
                 # of unequilibrated choices
                 # While we don't (obviously) equilibrate unequilibrated choices, we do use their supply to find their ASCs in the first-stage fit
                 np.bincount(self.hh_unequilibrated_choice, self.weights.values)
-            ],
-            hhidx=self.full_alternatives_hhidx,
-            choiceidx=[
-                self.full_alternatives_choiceidx,
-                self.full_alternatives_uneqchoiceidx
-            ],
+            ),
+            hhidx=self.full_hhidx[feasible_alts],
+            choiceidx=(
+                self.full_choiceidx[feasible_alts],
+                self.full_uneqchoiceidx[feasible_alts]
+            ),
             starting_values=self.first_stage_fit.ascs,
             weights=self.weights.values
         )
@@ -421,7 +454,7 @@ class TraSortingModel(BaseSortingModel):
         # descale coefs
         # but don't descale transformation parameters
         # recall that the _result_ of the transformation, not the inputs, is what is scaled, so this is okay
-        scalars = pd.Series(self.full_alternatives_stds, index=self.full_alternatives_colnames)
+        scalars = pd.Series(self.alternatives_stds, index=self.alternatives_colnames)
         scalars.loc[self.price_income_transformation.param_names] = 1
         scalars = scalars.reindex(self.first_stage_fit.params.index)
         self.first_stage_fit.params /= scalars

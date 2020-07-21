@@ -1,4 +1,4 @@
-#    Copyright 2019 Matthew Wigginton Conway
+#    Copyright 2019-2020 Matthew Wigginton Conway
 
 #    Licensed under the Apache License, Version 2.0 (the "License");
 #    you may not use this file except in compliance with the License.
@@ -62,21 +62,21 @@ def compute_ascs (base_utilities, supply, hhidx, choiceidx, starting_values=None
         if np.any(~np.isfinite(exp_utils)):
             # TODO should raise ValueError, but that breaks numba
             print('Some exponentiated utilities are non-finite! This may be a scaling issue.')
-            print('Max ASC:')
-            print(np.max(ascs))
-            print('Min ASC')
-            print(np.min(ascs))
-            print('NaNs:')
-            print(np.sum(np.isnan(ascs)))
-            print('Min utility')
-            print(np.min(first_stage_utilities))
-            print('Max utility')
-            print(np.max(first_stage_utilities))
-            print('Min exp(utility)')
-            print(np.min(exp_utils))
-            print('Max exp(utility)')
-            print(np.max(exp_utils))
-            return np.array([42.0]) # will cause errors somewhere else, so the process will crash, and hopefully the user
+            # print('Max ASC:')
+            # print(np.max(ascs))
+            # print('Min ASC')
+            # print(np.min(ascs))
+            # print('NaNs:')
+            # print(np.sum(np.isnan(ascs)))
+            # print('Min utility')
+            # print(np.min(first_stage_utilities))
+            # print('Max utility')
+            # print(np.max(first_stage_utilities))
+            # print('Min exp(utility)')
+            # print(np.min(exp_utils))
+            # print('Max exp(utility)')
+            # print(np.max(exp_utils))
+            return [np.array([42.0])] # will cause errors somewhere else, so the process will crash, and hopefully the user
             # will find the output of the above print statement while debugging.
         
         logsums = np.bincount(hhidx, weights=exp_utils)
@@ -96,13 +96,15 @@ def compute_ascs (base_utilities, supply, hhidx, choiceidx, starting_values=None
             if np.abs(np.sum(margin_shares) - np.sum(supply[margin])) > 1e-3:
                 # TODO should raise ValueError, but that breaks numba
                 print('Total demand does not equal total supply! This may be a scaling issue.')
-                return np.array([42.0]) # will cause errors somewhere else, so the process will crash, and hopefully the user
+                return [np.array([42.0])] # will cause errors somewhere else, so the process will crash, and hopefully the user
                 # will find the output of the above print statement while debugging.
                 
             if np.max(np.abs(margin_shares - supply[margin])) >= convergence_criterion:
                 converged = False
 
-        if not converged:
+        if converged:
+            break
+        else:
             # update ASCs
             # this is not done in the above for loop because once the model has converged we don't want to update any more ASCs
             for margin in range(len(ascs)):

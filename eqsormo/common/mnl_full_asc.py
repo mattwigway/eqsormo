@@ -22,6 +22,7 @@ import pandas as pd
 import statsmodels.tools.numdiff
 
 from .compute_ascs import compute_ascs
+from .util import human_time
 
 LOG = getLogger(__name__)
 
@@ -74,12 +75,17 @@ class MNLFullASC(object):
         self._previous_ascs = ascs # speed convergence later
 
         endTime = time.perf_counter()
-        self.asc_time += (endTime - startTime)
+        totalTime = endTime - startTime
+        #LOG.info(f'found ASCs in {human_time(totalTime)}')
+        self.asc_time += totalTime
         return ascs
 
     def full_utility (self, params):
         'Full utilities including ASCs'
+        start_time = time.perf_counter()
         base_utilities = self.utility(params)
+        end_time = time.perf_counter()
+        #LOG.info(f'Computed base utilities in {human_time(end_time - start_time)}')
         ascs = self.compute_ascs(base_utilities)
         full_utilities = base_utilities
         for margin in range(len(ascs)):
@@ -103,7 +109,18 @@ class MNLFullASC(object):
         negll = -np.sum(np.log(self.choice_probabilities(params)))
         if np.isnan(negll) or not np.isfinite(negll):
             LOG.warn('log-likelihood nan or not finite, for params:\n' + str(params)) # just warn, solver may be able to get out of this
+        #LOG.info(f'Current negative log likelihood: {negll:.2f}')
         return negll
+
+    # some optimizers call with a second state arg, some do not. be lenient.
+    def log_progress (self, params, state=None):
+        negll = self.negative_log_likelihood(params)
+        improvement = negll - self._prev_ll
+        LOG.info(f'After iteration {self._iteration}, -ll {negll:.7f}, change: {improvement:.7f}')
+        self.negll_for_iteration.append(negll)
+        self.params_for_iteration.append(np.copy(params))
+        self._prev_ll = negll
+        self._iteration += 1
 
     def fit (self):
         LOG.info('Fitting multinomial logit model')
@@ -115,12 +132,19 @@ class MNLFullASC(object):
             LOG.warn('not all starting values are zero, log likelihood at constants is actually log likelihood at starting values and may be incorrect')
         self.loglik_constants = -self.negative_log_likelihood(self.starting_values)
 
+        self._iteration = 0
+        self._prev_ll = -self.loglik_constants
+        self.params_for_iteration = []
+        self.negll_for_iteration = []
         minResults = scipy.optimize.minimize(
             self.negative_log_likelihood,
             self.starting_values,
             method=self.method,
-            options={'disp': True}
+            options={'disp': True},
+            callback=self.log_progress
         )
+        self.params_for_iteration = np.array(self.params_for_iteration)
+        self.negll_for_iteration = np.array(self.negll_for_iteration)
 
         LOG.info('calculating and inverting Hessian')
         hess = statsmodels.tools.numdiff.approx_hess3(minResults.x, self.negative_log_likelihood)
