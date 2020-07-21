@@ -240,7 +240,7 @@ class TraSortingModel(BaseSortingModel):
         self.alternatives_colnames = colnames # hacky to set this every time but it never changes
 
         if self.alternatives_stds is None:
-            self.alternatives_stds = np.std(alternatives)
+            self.alternatives_stds = np.std(alternatives, axis=0)
         
         alternatives /= self.alternatives_stds
 
