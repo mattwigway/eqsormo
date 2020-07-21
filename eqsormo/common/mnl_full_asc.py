@@ -136,6 +136,7 @@ class MNLFullASC(object):
         self._prev_ll = -self.loglik_constants
         self.params_for_iteration = []
         self.negll_for_iteration = []
+        LOG.info('Before iteration 0, -ll {self._prev_ll:.7f}')
         minResults = scipy.optimize.minimize(
             self.negative_log_likelihood,
             self.starting_values,

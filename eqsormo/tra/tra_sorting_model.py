@@ -165,7 +165,7 @@ class TraSortingModel(BaseSortingModel):
         else:
             raise ValueError('Some validation checks failed (see log messages)')
 
-    def materialize_alternatives (self, hhidx, choiceidx, uneqchoiceidx):
+    def materialize_alternatives (self, hhidx, choiceidx, uneqchoiceidx, price_income_params=None):
         '''
         Materialize the alternatives for hhidx, choiceidx, and uneqchoiceidx, and return them.
 
@@ -178,6 +178,10 @@ class TraSortingModel(BaseSortingModel):
         It is okay if they are not sequential, but they should be monotonically increasing.
         '''
         start_time = time.perf_counter()
+
+        if price_income_params is None:
+            # can't refer to self in function def
+            price_income_params = self.price_income_starting_values
 
         assert len(hhidx) == len(choiceidx) and len(choiceidx) == len(uneqchoiceidx)
 
@@ -207,7 +211,7 @@ class TraSortingModel(BaseSortingModel):
             feasible_alts = np.full(len(alt_income), True)
         
         budget = np.full(len(hhidx), np.nan)
-        budget[feasible_alts] = self.price_income_transformation.apply(alt_income[feasible_alts], alt_price[feasible_alts], *self.price_income_starting_values)
+        budget[feasible_alts] = self.price_income_transformation.apply(alt_income[feasible_alts], alt_price[feasible_alts], *price_income_params)
         alternatives[:,current_col] = budget
         current_col += 1
         del alt_income, alt_price, budget # save memory
@@ -405,15 +409,21 @@ class TraSortingModel(BaseSortingModel):
             feasible_alts = (self.income.astype('float64').values[self.full_hhidx] * self.max_rent_to_income >\
                 self.price.astype('float64').values[self.full_choiceidx])
 
-        coefs = self.first_stage_fit.params.values[:-self.price_income_transformation.n_params]
+        if self.price_income_transformation.n_params > 0:
+            coefs = self.first_stage_fit.params.values[:-self.price_income_transformation.n_params]
+            price_income_params = self.first_stage_fit.params.values[-self.price_income_transformation.n_params:]
+        else:
+            coefs = self.first_stage_fit.params.values
+            price_income_params = []
+            # should be no need to recalculate budget here
 
         # compute utility in blocks to save memory. we can do this because we don't actually need to materialize the full_alternatives matrix
         # to cumpute the utility - and in the base case, the full alternatives matrix is 67 GB. Instead, we materialize chunks, compute the dot
         # product with the coefs for those alternatives, and iteratively update
         base_utility = np.full(len(self.full_hhidx), np.nan)
-        chunk_rows = int(np.floor(self.max_chunk_bytes / len(self.alternative_colnames) / 8)) # bytes per float64
+        chunk_rows = int(np.floor(self.max_chunk_bytes / len(self.alternatives_colnames) / 8)) # bytes per float64
 
-        LOG.info(f'Computing full utilities using {len(self.full_hhidx) // chunk_rows + 1} chunks of {chunk_rows} rows each ({human_bytes(chunk_rows * len(self.alternative_colnames) * 8)} each)')
+        LOG.info(f'Computing full utilities using {len(self.full_hhidx) // chunk_rows + 1} chunks of {chunk_rows} rows each ({human_bytes(chunk_rows * len(self.alternatives_colnames) * 8)} each)')
 
         fullAscStartTime = time.perf_counter()
 
@@ -426,7 +436,8 @@ class TraSortingModel(BaseSortingModel):
             chunk_alts = self.materialize_alternatives(
                 self.full_hhidx[chunk_start:chunk_end],
                 self.full_choiceidx[chunk_start:chunk_end],
-                self.full_uneqchoiceidx[chunk_start:chunk_end]
+                self.full_uneqchoiceidx[chunk_start:chunk_end],
+                price_income_params=price_income_params
             )
             # add systematic utility and deterministic part of ASC based on market share
             base_utility[chunk_start:chunk_end] = np.dot(chunk_alts, coefs) +\
@@ -454,6 +465,7 @@ class TraSortingModel(BaseSortingModel):
         # descale coefs
         # but don't descale transformation parameters
         # recall that the _result_ of the transformation, not the inputs, is what is scaled, so this is okay
+        # TODO make sure this is rescaling correctly
         scalars = pd.Series(self.alternatives_stds, index=self.alternatives_colnames)
         scalars.loc[self.price_income_transformation.param_names] = 1
         scalars = scalars.reindex(self.first_stage_fit.params.index)
@@ -461,7 +473,8 @@ class TraSortingModel(BaseSortingModel):
         self.first_stage_fit.se /= scalars
 
         # TODO make pd.series
-        self.first_stage_ascs = ascs
+        self.first_stage_ascs = pd.Series(ascs[0], index=self.housing_xwalk.index)
+        self.first_stage_uneq_ascs = pd.Series(ascs[1], index=self.unequilibrated_choice_xwalk.index)
         LOG.info(f'Finding full ASCs took {fullAscEndTime - fullAscStartTime:.3f}s')
 
     def fit_second_stage (self):
@@ -620,12 +633,20 @@ Budget function {price_income_transformation}
 First stage (discrete choice sorting model):
 {first_stage_summary}
 
+Equilibrated (housing) ASCs:
+{equilibrated_ascs}
+
+Unequilibrated ASCs:
+{unequilibrated_ascs}
+
 Second stage (OLS parameters):
 {second_stage_summary}
 
 Fit with EqSorMo version {version}, https://github.com/mattwigway/eqsormo            
         '''.format(
             first_stage_summary=self.first_stage_fit.summary(),
+            unequilibrated_ascs=pd.DataFrame(self.first_stage_uneq_ascs).to_string(),
+            equilibrated_ascs=pd.DataFrame(self.first_stage_ascs.describe()).to_string(),
             second_stage_summary=self.second_stage_fit.summary(),
             creation_time=self.creation_time.strftime('%Y-%m-%d %H:%M:%S %Z'),
             price_income_transformation=self.price_income_transformation.name,
