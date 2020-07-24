@@ -45,7 +45,7 @@ class TraSortingModel(BaseSortingModel):
     '''
 
     def __init__ (self, housing_attributes, household_attributes,  interactions, unequilibrated_hh_params, unequilibrated_hsg_params, second_stage_params, price, income, choice, unequilibrated_choice, price_income_transformation=price_income.logdiff,
-            price_income_starting_values=[], sample_alternatives=None, method='L-BFGS-B', max_rent_to_income=None, household_housing_attributes=None, weights=None, max_chunk_bytes=2e9):
+            price_income_starting_values=[], sample_alternatives=None, method='L-BFGS-B', max_rent_to_income=None, household_housing_attributes=None, weights=None, max_chunk_bytes=2e9, est_first_stage_ses=True):
         '''
         Initialize a Tra sorting model
 
@@ -86,6 +86,9 @@ class TraSortingModel(BaseSortingModel):
         array. However, since the coefficients array is a column vector, we can compute the product of chunks of the full alternatives array and the column vector, then concatenate.
         This tuning parameter controls how large these chunks are in bytes. Default 2GB.
         :type max_chunk_bytes: int
+
+        :param est_first_stage_ses: If False, do not estimate standard errors for the first stage. This can significantly speed convergence and is recommended during model development.
+        :type est_first_stage_ses: bool
         '''
         self.housing_attributes = housing_attributes
         self.household_attributes = household_attributes
@@ -112,6 +115,7 @@ class TraSortingModel(BaseSortingModel):
         self.method = method
         self.max_rent_to_income = max_rent_to_income
         self.max_chunk_bytes = max_chunk_bytes
+        self.est_first_stage_ses = est_first_stage_ses
 
         self._rng = np.random.default_rng()
 
@@ -390,7 +394,8 @@ class TraSortingModel(BaseSortingModel):
             ),
             starting_values=np.concatenate([np.zeros(self.alternatives.shape[1]), self.price_income_transformation.starting_values]),
             param_names=[*self.alternatives_colnames, *self.price_income_transformation.param_names],
-            method=self.method
+            method=self.method,
+            est_ses=self.est_first_stage_ses
         )
 
         self.first_stage_fit.fit()
@@ -470,12 +475,13 @@ class TraSortingModel(BaseSortingModel):
         scalars.loc[self.price_income_transformation.param_names] = 1
         scalars = scalars.reindex(self.first_stage_fit.params.index)
         self.first_stage_fit.params /= scalars
-        self.first_stage_fit.se /= scalars
+        if self.est_first_stage_ses:
+            self.first_stage_fit.se /= scalars
 
         # TODO make pd.series
         self.first_stage_ascs = pd.Series(ascs[0], index=self.housing_xwalk.index)
         self.first_stage_uneq_ascs = pd.Series(ascs[1], index=self.unequilibrated_choice_xwalk.index)
-        LOG.info(f'Finding full ASCs took {fullAscEndTime - fullAscStartTime:.3f}s')
+        LOG.info(f'Finding full ASCs took {human_time(fullAscEndTime - fullAscStartTime)}')
 
     def fit_second_stage (self):
         LOG.info('fitting second stage')

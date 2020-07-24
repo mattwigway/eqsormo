@@ -35,7 +35,7 @@ class MNLFullASC(object):
     This class estimates such multinomial logit models.
     '''
 
-    def __init__ (self, utility, supply, hhidx, choiceidx, chosen, starting_values, method='L-BFGS-B', asc_convergence_criterion=1e-6, param_names=None):
+    def __init__ (self, utility, supply, hhidx, choiceidx, chosen, starting_values, method='L-BFGS-B', asc_convergence_criterion=1e-6, param_names=None, est_ses=True):
         '''
         :param utility: Function that returns utility for all choice alternatives and decisionmakers for a given set of parameters, not including ASCs. Receives parameters as a numpy array. Should return a MultiIndexed-pandas dataframe with indices called 'decisionmaker' and 'choice'
         :type utility: function
@@ -62,6 +62,7 @@ class MNLFullASC(object):
         self.hhidx = hhidx
         self.choiceidx = choiceidx
         self.chosen = chosen
+        self.est_ses = est_ses
 
     def compute_ascs (self, base_utilities):
         '''
@@ -82,9 +83,7 @@ class MNLFullASC(object):
 
     def full_utility (self, params):
         'Full utilities including ASCs'
-        start_time = time.perf_counter()
         base_utilities = self.utility(params)
-        end_time = time.perf_counter()
         #LOG.info(f'Computed base utilities in {human_time(end_time - start_time)}')
         ascs = self.compute_ascs(base_utilities)
         full_utilities = base_utilities
@@ -147,51 +146,70 @@ class MNLFullASC(object):
         self.params_for_iteration = np.array(self.params_for_iteration)
         self.negll_for_iteration = np.array(self.negll_for_iteration)
 
-        LOG.info('calculating and inverting Hessian')
-        hess = statsmodels.tools.numdiff.approx_hess3(minResults.x, self.negative_log_likelihood)
-        hessInv = np.linalg.inv(hess)
-        ses = np.sqrt(np.diag(hessInv))
-        LOG.info('done calculating and inverting Hessian')
+        if self.est_ses:
+            LOG.info('calculating and inverting Hessian')
+            # TODO robust SEs
+            hess = statsmodels.tools.numdiff.approx_hess3(minResults.x, self.negative_log_likelihood)
+            hessInv = np.linalg.inv(hess)
+            ses = np.sqrt(np.diag(hessInv))
+            LOG.info('done calculating and inverting Hessian')
+        else:
+            LOG.info('Not calculating Hessian because standard errors were not requested')
 
         self.loglik_beta = -self.negative_log_likelihood(minResults.x)
         if self.param_names is None:
             self.params = minResults.x
-            self.se = ses
+            if self.est_ses:
+                self.se = ses
         else:
             self.params = pd.Series(minResults.x, index=self.param_names)
-            self.se = pd.Series(ses, index=self.param_names)
+            if self.est_ses:
+                self.se = pd.Series(ses, index=self.param_names)
 
         # TODO compute t-stats
-        self.zvalues = self.params / self.se
-        self.pvalues = scipy.stats.norm.cdf(1 - np.abs(self.zvalues))
+        if self.est_ses:
+            self.zvalues = self.params / self.se
+            self.pvalues = scipy.stats.norm.cdf(1 - np.abs(self.zvalues))
 
-        # TODO robust SEs
         self.ascs = self.compute_ascs(self.utility(minResults.x))
         self.converged = minResults.success
 
         endTime = time.perf_counter()
         if self.converged:
-            LOG.info(f'Multinomial logit model converged in {endTime - startTime:.3f} seconds: {minResults.message}')
+            LOG.info(f'Multinomial logit model converged in {human_time(endTime - startTime)} seconds: {minResults.message}')
         else:
-            LOG.error(f'Multinomial logit model FAILED TO CONVERGE in {endTime - startTime:.3f} seconds: {minResults.message}')
-        LOG.info(f'  Finding ASCs took {self.asc_time:.3f} seconds')
+            LOG.error(f'Multinomial logit model FAILED TO CONVERGE in {human_time(endTime - startTime)} seconds: {minResults.message}')
+        LOG.info(f'  Finding ASCs took {human_time(self.asc_time)} seconds')
 
     def summary (self):
-        summ = pd.DataFrame({
-            'coef': self.params,
-            'se': self.se,
-            'z': self.zvalues,
-            'p': self.pvalues
-        }).round(3)
+        notes = []
+        if self.est_ses:
+            summ = pd.DataFrame({
+                'coef': self.params,
+                'se': self.se,
+                'z': self.zvalues,
+                'p': self.pvalues
+            }).round(3)
+        else:
+            summ = pd.DataFrame({'coef': self.params}).round(3)
+            notes.append('Standard errors not estimated')
+
+        if not self.converged:
+            notes.append('WARNING: CONVERGENCE NOT ACHIEVED.')
 
         chi2 = 2 * (self.loglik_beta - self.loglik_constants)
         chi2df = len(self.params)
         pchi2 = 1 - scipy.stats.chi2.cdf(chi2, df=chi2df)
 
+        # get around f-string cannot include backslash error
+        newline = '\n'
+
         return f'''
 Multinomial logit model with full ASCs
 Parameters:
 {str(summ)}
+Notes:
+{newline.join(notes)}
 
 Log likelihood at constants: {self.loglik_constants:.3f}
 Log likelihood at convergence: {self.loglik_beta:.3f}
