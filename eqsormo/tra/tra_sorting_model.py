@@ -194,7 +194,7 @@ class TraSortingModel(BaseSortingModel):
         ncols = len(self.interactions) + (len(self.unequilibrated_hh_params) +\
             len(self.unequilibrated_hsg_params)) * (len(self.unequilibrated_choice_xwalk) - 1) +\
                  1
-        LOG.info(f'Allocating full alternatives array of size {human_bytes(len(hhidx) * ncols * 8)}')
+        LOG.info(f'Allocating alternatives array of size {human_bytes(len(hhidx) * ncols * 8)}')
         alternatives = np.zeros((len(hhidx), ncols))
 
         # budget is first column, to make updates easier
