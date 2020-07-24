@@ -176,10 +176,10 @@ class MNLFullASC(object):
 
         endTime = time.perf_counter()
         if self.converged:
-            LOG.info(f'Multinomial logit model converged in {human_time(endTime - startTime)} seconds: {minResults.message}')
+            LOG.info(f'Multinomial logit model converged in {human_time(endTime - startTime)}: {minResults.message}')
         else:
-            LOG.error(f'Multinomial logit model FAILED TO CONVERGE in {human_time(endTime - startTime)} seconds: {minResults.message}')
-        LOG.info(f'  Finding ASCs took {human_time(self.asc_time)} seconds')
+            LOG.error(f'Multinomial logit model FAILED TO CONVERGE in {human_time(endTime - startTime)}: {minResults.message}')
+        LOG.info(f'  Finding ASCs took {human_time(self.asc_time)}')
 
     def summary (self):
         notes = []

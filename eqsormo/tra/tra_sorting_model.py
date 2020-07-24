@@ -169,7 +169,7 @@ class TraSortingModel(BaseSortingModel):
         else:
             raise ValueError('Some validation checks failed (see log messages)')
 
-    def materialize_alternatives (self, hhidx, choiceidx, uneqchoiceidx, price_income_params=None):
+    def materialize_alternatives (self, hhidx, choiceidx, uneqchoiceidx, hh_hsgidx=None, price_income_params=None):
         '''
         Materialize the alternatives for hhidx, choiceidx, and uneqchoiceidx, and return them.
 
@@ -180,6 +180,9 @@ class TraSortingModel(BaseSortingModel):
         uneqchoiceidx: 0 1 2 0 1 2 0 1 2 0 1 2 0 1 2 0 1 2 0 1 2 0 1 2 0 1 2
 
         It is okay if they are not sequential, but they should be monotonically increasing.
+
+        hh_hsgidx is the integer indices in household_housing_attributes for the selected household/housing combinations, same length
+        as hhidx etc.
         '''
         start_time = time.perf_counter()
 
@@ -188,6 +191,9 @@ class TraSortingModel(BaseSortingModel):
             price_income_params = self.price_income_starting_values
 
         assert len(hhidx) == len(choiceidx) and len(choiceidx) == len(uneqchoiceidx)
+        
+        if self.household_housing_attributes is not None:
+            assert hh_hsgidx is not None and len(hhidx) == len(hh_hsgidx)
 
         LOG.info(f'materializing {len(hhidx)} choices')
 
@@ -198,6 +204,10 @@ class TraSortingModel(BaseSortingModel):
         ncols = len(self.interactions) + (len(self.unequilibrated_hh_params) +\
             len(self.unequilibrated_hsg_params)) * (len(self.unequilibrated_choice_xwalk) - 1) +\
                  1
+
+        if self.household_housing_attributes is not None:
+            ncols += len(self.household_housing_attributes.columns)
+        
         LOG.info(f'Allocating alternatives array of size {human_bytes(len(hhidx) * ncols * 8)}')
         alternatives = np.zeros((len(hhidx), ncols))
 
@@ -243,6 +253,12 @@ class TraSortingModel(BaseSortingModel):
                 colnames.append(f'{param}:uneq_choice_{self.unequilibrated_choice_xwalk[self.unequilibrated_choice_xwalk == uneqchoice].index[0]}')
                 current_col += 1
 
+        if self.household_housing_attributes is not None:
+            for c in self.household_housing_attributes.columns:
+                colnames.append(c)
+            
+            alternatives[:,current_col:] = self.household_housing_attributes.values[hh_hsgidx,:]
+
         total_time = time.perf_counter() - start_time
         LOG.info(f'Materialized alternatives into {human_shape(alternatives.shape)} array using {human_bytes(alternatives.nbytes)} in {human_time(total_time)}')
         self.alternatives_colnames = colnames # hacky to set this every time but it never changes
@@ -261,9 +277,9 @@ class TraSortingModel(BaseSortingModel):
         LOG.info('Converting pandas data to numpy')
         self.housing_xwalk = pd.Series(np.arange(len(self.housing_attributes)), index=self.housing_attributes.index)
 
-        # we always have an unequilibrated choice to simplify coding, it is just only a single choice if not specifice
+        # we always have an unequilibrated choice to simplify coding, it is just only a single choice if not specified
         # good ol' mononomial logit model
-        unequilibrated_choice = self.unequilibrated_choice.copy() if self.unequilibrated_choice is not None else pd.Series(np.zeros(len(choice), index=choice.index))
+        unequilibrated_choice = self.unequilibrated_choice.copy() if self.unequilibrated_choice is not None else pd.Series(np.zeros(len(self.choice), index=self.choice.index))
         unique_unequilibrated_choices = unequilibrated_choice.unique()
         self.unequilibrated_choice_xwalk = pd.Series(np.arange(len(unique_unequilibrated_choices)), index=unique_unequilibrated_choices)
         self.hh_xwalk = pd.Series(np.arange(len(self.household_attributes)), index=self.household_attributes.index)
@@ -287,9 +303,18 @@ class TraSortingModel(BaseSortingModel):
         self.full_uneqchosen = (self.hh_unequilibrated_choice[self.full_hhidx] == self.full_uneqchoiceidx)
         self.full_chosen = self.full_hsgchosen & self.full_uneqchosen
 
+        # create indices into the hh_housing_attributes so we can use it like a numpy array rather than with slow Pandas indexing
+        # full_hh_hsg[i] is the 0-based index into household_housing_attributes for full_alternative i.
+        # how we do it: build a Pandas series numbered 0...n and indexed like household_housing_attributes. then we zip the crosswalks together
+        # and select from household_housing_attributes.
+        if self.household_housing_attributes is not None:
+            self.full_hh_hsgidx = pd.Series(np.arange(len(self.household_housing_attributes)), index=self.household_housing_attributes.index)\
+                    .loc[list(zip(self.hh_xwalk.index[self.full_hhidx], self.housing_xwalk.index[self.full_choiceidx]))].values
+
         if self.sample_alternatives <= 0 or self.sample_alternatives is None:
             if self.max_rent_to_income is None:
-                self.alternatives = self.materialize_alternatives(self.full_hhidx, self.full_choiceidx, self.full_uneqchoiceidx)
+                self.alternatives = self.materialize_alternatives(self.full_hhidx, self.full_choiceidx, self.full_uneqchoiceidx,
+                    self.full_hh_hsgidx if self.household_housing_attributes is not None else None)
                 self.alternatives_hhidx = self.full_hhidx
                 self.alternatives_choiceidx = self.full_choiceidx
                 self.alternatives_uneqchoiceidx = self.full_uneqchoiceidx
@@ -343,7 +368,9 @@ class TraSortingModel(BaseSortingModel):
             self.alternatives_hsgchosen = self.full_hsgchosen[sampled_idxs]
             self.alternatives_uneqchosen = self.full_uneqchosen[sampled_idxs]
             self.alternatives_chosen = self.full_chosen[sampled_idxs]
-            self.alternatives = self.materialize_alternatives(self.alternatives_hhidx, self.alternatives_choiceidx, self.alternatives_uneqchoiceidx)
+            self.alternatives_hh_hsgindx = self.full_hh_hsgidx[sampled_idxs]
+            self.alternatives = self.materialize_alternatives(self.alternatives_hhidx, self.alternatives_choiceidx, self.alternatives_uneqchoiceidx,
+                self.alternatives_hh_hsgindx if self.household_housing_attributes is not None else None)
 
         endTime = time.perf_counter()
         LOG.info(f'Created alternatives for {len(self.household_attributes)} households in {endTime - startTime:.3f} seconds')
@@ -442,6 +469,7 @@ class TraSortingModel(BaseSortingModel):
                 self.full_hhidx[chunk_start:chunk_end],
                 self.full_choiceidx[chunk_start:chunk_end],
                 self.full_uneqchoiceidx[chunk_start:chunk_end],
+                self.full_hh_hsgidx[chunk_start:chunk_end] if self.household_housing_attributes is not None else None,
                 price_income_params=price_income_params
             )
             # add systematic utility and deterministic part of ASC based on market share
