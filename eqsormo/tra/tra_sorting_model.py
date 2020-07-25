@@ -319,7 +319,7 @@ class TraSortingModel(BaseSortingModel):
             hh_hsg_loc = pd.Series(np.arange(len(self.household_housing_attributes)), index=self.household_housing_attributes.index)
             for chunk_start in range(0, len(self.household_housing_attributes)):
                 chunk_end = min(chunk_start + 5000, len(self.household_housing_attributes))
-                self.full_hh_hsgidx[chunk_start:chunk_end] = 
+                self.full_hh_hsgidx[chunk_start:chunk_end] =\
                     hh_hsg_loc.loc[list(zip(self.hh_xwalk.index[self.full_hhidx[chunk_start:chunk_end]],
                     self.housing_xwalk.index[self.full_choiceidx[chunk_start:chunk_end]]))].values
             del hh_hsg_loc # save memory
