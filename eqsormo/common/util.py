@@ -29,10 +29,10 @@ def human_bytes (nbytes):
 def human_time (seconds):
     ret = []
     if seconds >= 3600:
-        ret.append(f'{seconds // 3600}h')
+        ret.append(f'{int(seconds // 3600)}h')
         seconds = seconds % 3600
     if seconds >= 60:
-        ret.append(f'{seconds // 60}m')
+        ret.append(f'{int(seconds // 60)}m')
         seconds = seconds % 60
     ret.append(f'{seconds:.3f}s')
 
