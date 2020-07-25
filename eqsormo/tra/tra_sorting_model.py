@@ -122,6 +122,7 @@ class TraSortingModel(BaseSortingModel):
         self.max_chunk_bytes = max_chunk_bytes
         self.est_first_stage_ses = est_first_stage_ses
 
+        self.seed = seed
         self._rng = np.random.default_rng(seed=seed)
 
         self.validate()
