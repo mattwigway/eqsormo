@@ -107,8 +107,10 @@ class TraSortingModel(BaseSortingModel):
         
         if weights is None:
             self.weights = None
+            self.weighted_supply = self.choice.value_counts()
         else:
             self.weights = weights.reindex(household_attributes.index)
+            self.weighted_supply = self.weights.groupby(self.choice).sum()
 
         self.price_income_transformation = price_income_transformation
         self.price_income_starting_values = price_income_starting_values
@@ -404,7 +406,62 @@ class TraSortingModel(BaseSortingModel):
         utils += self._log_supply
         
         return utils
-        
+
+    def chunked_full_alternatives (self, price_income_params):
+        '''
+        With large sorting models it is not possible to materialize the entire dataset all at once, as we will quickly run out of memory.
+        This function realizes the full alternatives in chunks and yields tuples of (chunk_start, chunk_end, chunk_alts).
+
+        This is useful to calculate e.g. a utility, which can be calculated in chunks by decomposing the matrix multiplication and then concatenating.
+        '''
+
+        chunk_rows = int(np.floor(self.max_chunk_bytes / len(self.alternatives_colnames) / 8)) # bytes per float64
+        LOG.info(f'Materializing full alternatives using {len(self.full_hhidx) // chunk_rows + 1} chunks of {chunk_rows} rows each ({human_bytes(chunk_rows * len(self.alternatives_colnames) * 8)} each)')
+
+        for chunk_start in range(0, len(self.full_hhidx), chunk_rows):
+            chunk_end = min(chunk_start + chunk_rows, len(self.full_hhidx))
+            chunk_alts = self.materialize_alternatives(
+                self.full_hhidx[chunk_start:chunk_end],
+                self.full_choiceidx[chunk_start:chunk_end],
+                self.full_uneqchoiceidx[chunk_start:chunk_end],
+                self.full_hh_hsgidx[chunk_start:chunk_end] if self.household_housing_attributes is not None else None,
+                price_income_params=price_income_params
+            )
+            yield chunk_start, chunk_end, chunk_alts
+
+    def full_utility (self, include_budget=True, include_ascs=True):
+        '''
+        Calculate full utilities (i.e. utilities for all alternatives, not just sampled ones). To remain within available memory,
+        this in chunks.
+        '''
+
+        utility = np.full_like(self.full_choiceidx, np.nan, dtype='float64')
+        # convert supply to an np array
+        lnsupply = np.log(self.weighted_supply.loc[self.housing_xwalk.index].values)
+
+        if self.price_income_transformation.n_params > 0:
+            coefs = self.first_stage_fit.params.values[:-self.price_income_transformation.n_params]
+            price_income_params = self.first_stage_fit.params.values[-self.price_income_transformation.n_params:]
+        else:
+            coefs = self.first_stage_fit.params.values
+            price_income_params = np.zeros(0)
+
+        for chunk_start, chunk_end, chunk_alts in self.chunked_full_alternatives(price_income_params):
+            if not include_budget:
+                # zero out budget so it does not affect utility. chunk_alts has been materialized just for us, okay
+                # to be destructive.
+                chunk_alts[:,0] = 0
+
+            # add systematic utility and deterministic part of ASC based on market share
+            # TODO okay to just add log(weighted) here when ASCs were calc'd with log(unweighted)? I think so.
+            utility[chunk_start:chunk_end] = np.dot(chunk_alts, coefs) +\
+                lnsupply[self.full_choiceidx[chunk_start:chunk_end]]
+
+        if include_ascs:
+            utility += self.first_stage_ascs.values[self.full_choiceidx] + self.first_stage_uneq_ascs.values[self.full_uneqchoiceidx]
+
+        return utility
+
     def fit_first_stage (self):
         LOG.info('fitting first stage')
 
@@ -441,49 +498,20 @@ class TraSortingModel(BaseSortingModel):
             feasible_alts = (self.income.astype('float64').values[self.full_hhidx] * self.max_rent_to_income >\
                 self.price.astype('float64').values[self.full_choiceidx])
 
-        if self.price_income_transformation.n_params > 0:
-            coefs = self.first_stage_fit.params.values[:-self.price_income_transformation.n_params]
-            price_income_params = self.first_stage_fit.params.values[-self.price_income_transformation.n_params:]
-        else:
-            coefs = self.first_stage_fit.params.values
-            price_income_params = []
-            # should be no need to recalculate budget here
+        base_utility = self.full_utility(include_ascs=False)
 
-        # compute utility in blocks to save memory. we can do this because we don't actually need to materialize the full_alternatives matrix
-        # to cumpute the utility - and in the base case, the full alternatives matrix is 67 GB. Instead, we materialize chunks, compute the dot
-        # product with the coefs for those alternatives, and iteratively update
-        base_utility = np.full(len(self.full_hhidx), np.nan)
-        chunk_rows = int(np.floor(self.max_chunk_bytes / len(self.alternatives_colnames) / 8)) # bytes per float64
-
-        LOG.info(f'Computing full utilities using {len(self.full_hhidx) // chunk_rows + 1} chunks of {chunk_rows} rows each ({human_bytes(chunk_rows * len(self.alternatives_colnames) * 8)} each)')
+        assert not np.any(np.isnan(base_utility[feasible_alts]))
 
         fullAscStartTime = time.perf_counter()
-
-        # compute these with weights. This should be okay because the unweighted estimates are consistent if the sampling is conditional
-        # on the choices, and with all the other assumptions we're making we might as well make that one as well... we're not doing much with
-        # the second stage estimates anyhow
-        weighted_supply = np.bincount(self.hh_hsg_choice, self.weights.values)
-        for chunk_start in range(0, len(self.full_hhidx), chunk_rows):
-            chunk_end = min(chunk_start + chunk_rows, len(self.full_hhidx))
-            chunk_alts = self.materialize_alternatives(
-                self.full_hhidx[chunk_start:chunk_end],
-                self.full_choiceidx[chunk_start:chunk_end],
-                self.full_uneqchoiceidx[chunk_start:chunk_end],
-                self.full_hh_hsgidx[chunk_start:chunk_end] if self.household_housing_attributes is not None else None,
-                price_income_params=price_income_params
-            )
-            # add systematic utility and deterministic part of ASC based on market share
-            base_utility[chunk_start:chunk_end] = np.dot(chunk_alts, coefs) +\
-                np.log(weighted_supply)[self.full_choiceidx[chunk_start:chunk_end]]
 
         ascs = compute_ascs(
             base_utilities=base_utility[feasible_alts],
             supply=(
                 # of homes
-                weighted_supply,
+                self.weighted_supply.loc[self.housing_xwalk.index].values,
                 # of unequilibrated choices
                 # While we don't (obviously) equilibrate unequilibrated choices, we do use their supply to find their ASCs in the first-stage fit
-                np.bincount(self.hh_unequilibrated_choice, self.weights.values)
+                np.bincount(self.hh_unequilibrated_choice, self.weights.loc[self.hh_xwalk.index].values)
             ),
             hhidx=self.full_hhidx[feasible_alts],
             choiceidx=(
@@ -491,7 +519,7 @@ class TraSortingModel(BaseSortingModel):
                 self.full_uneqchoiceidx[feasible_alts]
             ),
             starting_values=self.first_stage_fit.ascs,
-            weights=self.weights.values
+            weights=self.weights.loc[self.hh_xwalk.index].values
         )
         fullAscEndTime = time.perf_counter()
 
@@ -506,7 +534,9 @@ class TraSortingModel(BaseSortingModel):
         if self.est_first_stage_ses:
             self.first_stage_fit.se /= scalars
 
-        # TODO make pd.series
+        # no scaling needed anymore
+        self.alternatives_stds = np.ones_like(self.alternatives_stds)
+
         self.first_stage_ascs = pd.Series(ascs[0], index=self.housing_xwalk.index)
         self.first_stage_uneq_ascs = pd.Series(ascs[1], index=self.unequilibrated_choice_xwalk.index)
         LOG.info(f'Finding full ASCs took {human_time(fullAscEndTime - fullAscStartTime)}')
@@ -531,10 +561,20 @@ class TraSortingModel(BaseSortingModel):
             LOG.info('No second stage requested')
 
     def sort (self, maxiter=np.inf):
-        'Clear the market after changes have been made to the data'
+        '''
+        Clear the market with a change to supply
+
+        TODO document which data structures can be changed and still have this function return correct results
+        '''
         LOG.info('Clearing the market and sorting households')
         LOG.info("There's nothing hidden in your head / the Sorting Hat can't see / so try me on and I will tell you / where you ought to be.\n" +\
             "    -JK Rowling, Harry Potter and the Sorcerer's Stone")
+
+        # convert supply to an np array
+        supply = self.weighted_supply.loc[self.housing_xwalk.index].values
+
+        if not np.sum(supply) == np.sum(self.weights):
+            raise ValueError('total supply has changed!')
 
         # first update second stage
         if self.second_stage_params is not None:
@@ -546,116 +586,87 @@ class TraSortingModel(BaseSortingModel):
             self.first_stage_ascs = pred_ascs
         else:
             LOG.info('No second stage fit, not updating')
-            pred_ascs = self.first_stage_ascs
+            pred_ascs = self.first_stage_ascs[0]
 
-        # then update the first stage
-        if self.household_housing_attributes is not None:
-            otherInteractions = {vname: self.fullAlternatives[vname] for vname in self.household_housing_attributes}
-        else:
-            otherInteractions = dict()
-
-        full_first_stage_data = pd.DataFrame({**{
-            # demeaning b/c it was done in the Bayer paper - and since we don't sample from households no concerns about using the mean
-            f'{household}:{housing}': (self.fullAlternatives[household] - self.household_attributes[household].mean()) * self.fullAlternatives[housing]
-            for household, housing in self.interactions
-        }, **otherInteractions})
+        LOG.info('finding non-price utilites')
+        non_price_utilities = self.full_utility(include_budget=False)
+        assert not np.any(np.isnan(non_price_utilities))
 
         # Note that I am intentionally _not_ dropping hh/choice combinations here that do not meet rent to income criteria, because which households those are
         # might change in the sorting phase. The filtering happens there. This does not matter for the calculation of utility below, since utilities for
         # different alternatives are independent of each other and the budget is set to zero anyhow.
+
         if self.price_income_transformation.n_params > 0:
-            coefs = self.first_stage_fit.params.iloc[:-self.price_income_transformation.n_params]
-            transformationParams = self.first_stage_fit.params.values[-self.price_income_transformation.n_params:]
+            price_income_params = self.first_stage_fit.params.values[-self.price_income_params:]
         else:
-            coefs = self.first_stage_fit.params
-            transformationParams = np.array([])
-
-        # set the budget utility to zero for all households - and solve for below
-        full_first_stage_data['budget'] = 0
-
-        choice_xwalk = pd.Series(np.arange(len(self.housing_attributes)), index=self.housing_attributes.index)
-        hh_xwalk = pd.Series(np.arange(len(self.household_attributes)), index=self.household_attributes.index)
-
-        choiceidx = choice_xwalk.loc[full_first_stage_data.index.get_level_values('choice')].values
-        hhidx = hh_xwalk.loc[full_first_stage_data.index.get_level_values('household')].values
-
-        base_utility = np.dot(full_first_stage_data[coefs.index].values, coefs.values)
-        non_price_utilities = base_utility +\
-            self.first_stage_ascs.loc[choice_xwalk.index].values[choiceidx] +\
-            np.log(self.weighted_supply.loc[choice_xwalk.index].values[choiceidx])
+            price_income_params = np.zeros(0)
 
         startTimeClear = time.perf_counter()
         new_prices = clear_market(
             non_price_utilities=non_price_utilities,
-            hhidx=hhidx,
-            choiceidx=choiceidx,
-            supply=self.weighted_supply.loc[choice_xwalk.index].values, # weighted supply is identical to unweighted supply when there are no weights
-            income=self.income.loc[hh_xwalk.index].values,
-            starting_price=self.price.loc[choice_xwalk.index].values,
+            hhidx=self.full_hhidx,
+            choiceidx=self.full_choiceidx,
+            supply=supply,
+            income=self.income.loc[self.hh_xwalk.index].values,
+            starting_price=self.price.loc[self.housing_xwalk.index].values,
             price_income_transformation=self.price_income_transformation,
-            price_income_params=transformationParams,
+            price_income_params=price_income_params,
             budget_coef=self.first_stage_fit.params['budget'],
             max_rent_to_income=self.max_rent_to_income,
             maxiter=maxiter,
-            weights=self.weights.loc[hh_xwalk.index].values if self.weights is not None else None
+            weights=self.weights.loc[self.hh_xwalk.index].values if self.weights is not None else None
         )
         endTimeClear = time.perf_counter()
 
-        new_prices = pd.Series(new_prices, index=choice_xwalk.index)
+        new_prices = pd.Series(new_prices, index=self.housing_xwalk.index)
 
         maxPriceChange = np.max(np.abs(new_prices - self.price))
 
-        LOG.info(f'Market cleared in {endTimeClear - startTimeClear:.2f}s, with price changes up to {maxPriceChange:.4f}')
+        LOG.info(f'Market cleared in {human_time(endTimeClear - startTimeClear)}, with price changes up to {maxPriceChange:.4f}')
 
         self.price = new_prices
 
+    def _probabilities (self):
+        'Compute probabilities and return as numpy array, use .probabilities() for a Pandas data frame'
+        LOG.info('finding utility')
+
+        if self.max_rent_to_income is None:
+            feasible_alts = np.full(True, len(self.full_hhidx))
+        else:
+            feasible_alts = (self.income.astype('float64').values[self.full_hhidx] * self.max_rent_to_income >\
+                self.price.astype('float64').values[self.full_choiceidx])
+
+        exp_utility = np.exp(self.full_utility()[feasible_alts])
+        assert not np.any(np.isnan(exp_utility))
+        expsums = np.bincount(self.full_hhidx[feasible_alts], exp_utility)
+        probs = np.zeros_like(self.full_choiceidx, dtype='float64')
+        # alts not in choice set b/c infeasible are left with probability zero
+        probs[feasible_alts] = exp_utility / expsums[self.full_hhidx[feasible_alts]]
+        return probs
+
     def probabilities (self):
-        if self.household_housing_attributes is not None:
-            otherInteractions = {vname: self.fullAlternatives[vname] for vname in self.household_housing_attributes}
-        else:
-            otherInteractions = dict()
-        
-        full_first_stage_data = pd.DataFrame({**{
-            # demeaning b/c it was done in the Bayer paper - and since we don't sample from households no concerns about using the mean
-            f'{household}:{housing}': (self.fullAlternatives[household] - self.household_attributes[household].mean()) * self.fullAlternatives[housing]
-            for household, housing in self.interactions
-        }, **otherInteractions})
+        'Return choice probabilities as Pandas dataframe, indexed by household ID, choice ID, and uneq choice ID'
+        probs = self._probabilities()
+        idx = pd.MultiIndex.from_tuples(list(zip(
+            self.hh_xwalk.index[self.full_hhidx],
+            self.housing_xwalk.index[self.full_choiceidx],
+            self.unequilibrated_choice_xwalk.index[self.full_uneqchoiceidx]
+        )))
+        return pd.Series(probs, index=idx)
 
-        if self.max_rent_to_income is not None:
-            full_first_stage_data = full_first_stage_data[
-                self.fullAlternatives.income.reindex(full_first_stage_data.index) * self.max_rent_to_income >\
-                    self.price.reindex(full_first_stage_data.index, level='choice')]
+    def _mkt_shares (self):
+        probs = self._probabilities() * self.weights.loc[self.hh_xwalk.index].values[self.full_hhidx]
+        return np.bincount(self.full_choiceidx, probs)
 
-        if self.price_income_transformation.n_params > 0:
-            coefs = self.first_stage_fit.params.iloc[:-self.price_income_transformation.n_params]
-            transformationParams = self.first_stage_fit.params.values[-self.price_income_transformation.n_params:]
-        else:
-            coefs = self.first_stage_fit.params
-            transformationParams = np.array([])
+    def mkt_shares (self):
+        return pd.Series(self._mkt_shares(), index=self.housing_xwalk.index)
+    
+    def _uneq_mkt_shares (self):
+        probs = self._probabilities() * self.weights.loc[self.hh_xwalk.index].values[self.full_hhidx]
+        return np.bincount(self.full_uneqchoiceidx, probs)
 
-        full_first_stage_data['budget'] = self.price_income_transformation.apply(
-            self.fullAlternatives.income.loc[full_first_stage_data.index],
-            self.price.reindex(full_first_stage_data.index, level='choice'),
-            *transformationParams)
-
-        choice_xwalk = pd.Series(np.arange(len(self.housing_attributes)), index=self.housing_attributes.index)
-        hh_xwalk = pd.Series(np.arange(len(self.household_attributes)), index=self.household_attributes.index)
-
-        choiceidx = choice_xwalk.loc[full_first_stage_data.index.get_level_values('choice')].values
-        hhidx = hh_xwalk.loc[full_first_stage_data.index.get_level_values('household')].values
-
-        utilities = np.dot(full_first_stage_data[coefs.index].values, coefs.values) + self.first_stage_ascs.loc[choice_xwalk.index].values[choiceidx]
-        exp_utilities = np.exp(utilities)
-
-        if not np.all(np.isfinite(exp_utilities)):
-            raise ValueError('Non-finite utility detected!')
-
-        logsums = np.bincount(hhidx, weights=exp_utilities)
-        probs = exp_utilities / logsums[hhidx]
-
-        # NB not multiplying by weights here. This is the choice probability, not the market share
-
-        return pd.Series(probs, index=full_first_stage_data.index).rename('choice_prob')
+    def uneq_mkt_shares (self):
+        return pd.Series(self._uneq_mkt_shares(), index=self.unequilibrated_choice_xwalk.index)
 
     def to_text (self, fn=None):
         "Save model results as text. If fn==None, return as string"
