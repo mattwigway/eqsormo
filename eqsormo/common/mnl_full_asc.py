@@ -169,7 +169,8 @@ class MNLFullASC(object):
         # TODO compute t-stats
         if self.est_ses:
             self.zvalues = self.params / self.se
-            self.pvalues = scipy.stats.norm.cdf(1 - np.abs(self.zvalues))
+            # two-tailed test
+            self.pvalues = 2 * scipy.stats.norm.cdf(-np.abs(self.zvalues))
 
         self.ascs = self.compute_ascs(self.utility(minResults.x))
         self.converged = minResults.success
