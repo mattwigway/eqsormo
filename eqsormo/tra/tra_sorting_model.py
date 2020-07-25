@@ -45,7 +45,7 @@ class TraSortingModel(BaseSortingModel):
     '''
 
     def __init__ (self, housing_attributes, household_attributes,  interactions, unequilibrated_hh_params, unequilibrated_hsg_params, second_stage_params, price, income, choice, unequilibrated_choice, price_income_transformation=price_income.logdiff,
-            price_income_starting_values=[], sample_alternatives=None, method='L-BFGS-B', max_rent_to_income=None, household_housing_attributes=None, weights=None, max_chunk_bytes=2e9, est_first_stage_ses=True):
+            price_income_starting_values=[], sample_alternatives=None, method='L-BFGS-B', max_rent_to_income=None, household_housing_attributes=None, weights=None, max_chunk_bytes=2e9, est_first_stage_ses=True, seed=None):
         '''
         Initialize a Tra sorting model
 
@@ -89,6 +89,9 @@ class TraSortingModel(BaseSortingModel):
 
         :param est_first_stage_ses: If False, do not estimate standard errors for the first stage. This can significantly speed convergence and is recommended during model development.
         :type est_first_stage_ses: bool
+
+        :param seed: seed for the RNG
+        :type seed: int
         '''
         self.housing_attributes = housing_attributes
         self.household_attributes = household_attributes
@@ -119,7 +122,7 @@ class TraSortingModel(BaseSortingModel):
         self.max_chunk_bytes = max_chunk_bytes
         self.est_first_stage_ses = est_first_stage_ses
 
-        self._rng = np.random.default_rng()
+        self._rng = np.random.default_rng(seed=seed)
 
         self.validate()
 
