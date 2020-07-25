@@ -93,17 +93,34 @@ def clear_market (non_price_utilities, hhidx, choiceidx, supply, income, startin
             # since the budgets are independent between houses and between choosers, this is a fast numpy vectorized operation. We need a
             # loop to compute derivatives of budget. That can be done as a numpy vectorized operation
             alt_price = price[choiceidx]
-            budget = price_income_transformation.apply(alt_income, alt_price, *price_income_params)
+
+            budget = np.zeros_like(alt_income)
+            if max_rent_to_income is None:
+                feasible_alts = np.full_like(alt_price, True)
+            else:
+                feasible_alts = alt_income * max_rent_to_income > alt_price
+
+            budget = np.full_like(alt_income, np.nan)
+            budget[feasible_alts] = price_income_transformation.apply(alt_income[feasible_alts], alt_price[feasible_alts], *price_income_params)
             price_step = 1e-8
-            budget_step = price_income_transformation.apply(alt_income, alt_price + price_step, *price_income_params)
+            budget_step = np.full_like(alt_income, np.nan)
+
+            if max_rent_to_income is None:
+                feasible_alts_step = np.full_like(alt_price, True)
+            else:
+                feasible_alts_step = alt_income * max_rent_to_income > alt_price
+            budget_step[feasible_alts] = price_income_transformation.apply(alt_income[feasible_alts_step], alt_price[feasible_alts_step] + price_step, *price_income_params)
 
             # fix one price from changing
             # TODO pick price in a smarter way (PUMA with least change?)
             # Appears to be causing convergence problems.
             #excess_demand[0] = 0
 
+            # NB derivatives are ill-behaved at the boundary where a choice enters a household's choice set due to the price dropping below their
+            # income. We assume that what is in each household's choice set is nonchanging for the purpose of calculating derivatives.
+            # Nope, that won't work.
             deriv = compute_derivatives(price, alt_income, choiceidx, hhidx, non_price_utilities, budget, budget_step, price_step, budget_coef,
-                shares, max_rent_to_income, weights)
+                shares, max_rent_to_income, feasible_alts, feasible_alts_step, weights)
         
             if not np.all(deriv < 0):
                 raise ValueError('some derivatives of price are nonnegative')
@@ -114,102 +131,58 @@ def clear_market (non_price_utilities, hhidx, choiceidx, supply, income, startin
             pbar.update()
 
 #@numba.jit(nopython=True) seems to slow things down but I may just not be letting it warm up
-def compute_derivatives (price, alt_income, choiceidx, hhidx, non_price_utilities, budget, budget_step, price_step, budget_coef, base_shares, max_rent_to_income, weights):
+def compute_derivatives (price, alt_income, choiceidx, hhidx, non_price_utilities, budget, budget_step, price_step, budget_coef, base_shares, max_rent_to_income,
+        feasible_alts, feasible_alts_step, weights):
     deriv = np.zeros_like(price)
 
-    alt_price = price[choiceidx]
-    sim_price = np.copy(alt_price)
+    base_exp_utilities = np.exp(non_price_utilities + budget_coef * budget)
+    # exp utility of zero is out of choice set
+    base_exp_utilities[~feasible_alts] = 0
+    exp_utilities = np.copy(base_exp_utilities)
+    step_exp_utilities = np.exp(non_price_utilities + budget_coef * budget_step)
+    step_exp_utilities[~feasible_alts_step] = 0
 
-    base_utilities = non_price_utilities + budget_coef * budget
-    full_utilities = np.copy(base_utilities)
-    utility_step = budget_coef * (budget_step - budget)
+    if not np.all(np.isfinite(exp_utilities)) or not np.all(np.isfinite(step_exp_utilities)):
+        raise FloatingPointError('Not all exp(utilities) are finite (scaling?)')
 
     # cache weights
     if weights is not None:
         alt_weights = weights[hhidx]
 
-    max_price = alt_income * max_rent_to_income 
-
     for i in range(len(price)):
-        #startTime = time()
         choicemask = choiceidx == i
-
-        #choicemaskTime = time()
-
-        # only used in places where price exceeds budget
-        sim_price[choicemask] += price_step
-
-        full_utilities[choicemask] += utility_step[choicemask] 
-        #copyTime = time()
-
-        exp_utility = np.exp(full_utilities)
-        #expTime = time()
-
-        if max_rent_to_income is not None:
-            # setting expUtility to zero means choice probability will be 0, and choice will also not be added to the logsum
-            # This is equivalent to removing from the choice set
-            exp_utility[max_price <= sim_price] = 0
-
-        #exclTime = time()
-
-        if not np.all(np.isfinite(exp_utility)):
-            print('Not all exp(utilities) are finite (scaling?)')
-            return np.zeros(0) # will cause error, and hopefully someone will see message above - work around numba limitation on raising
-
-        #isfinTime = time()
-
-        logsums = np.bincount(hhidx, weights=exp_utility)
-        #logsumTime = time()
-
-        probs = exp_utility[choicemask] / logsums[hhidx[choicemask]]
-        #probTime = time()
-
+        exp_utilities[choicemask] = step_exp_utilities[choicemask]
+        util_sums = np.bincount(hhidx, weights=exp_utilities)
+        probs = exp_utilities[choicemask] / util_sums[hhidx[choicemask]]
         if weights is not None:
             probs *= alt_weights[choicemask]
-
-        #weightTime = time()
-
         share_step = np.sum(probs)
         deriv[i] = (share_step - base_shares[i]) / price_step
+        exp_utilities[choicemask] = base_exp_utilities[choicemask]
 
-        #shareTime = time()
-
-        # clean up
-        sim_price[choicemask] -= price_step
-        full_utilities[choicemask] = base_utilities[choicemask]
-        #copyTime2 = time()
-
-        # print(f'one derivative: {copyTime2 - startTime:.3f}s')
-        # print(f'  choice mask: {choicemaskTime - startTime:.3f}s')
-        # print(f'  copy time: {copyTime - choicemaskTime:.3f}s')
-        # print(f'  exp time: {expTime - copyTime}')
-        # print(f'  exclusion time: {exclTime - expTime:.3f}s')
-        # print(f'  isfinite time: {isfinTime - exclTime:.3f}s')
-        # print(f'  logsum time: {logsumTime - isfinTime:.3f}s')
-        # print(f'  probs time: {probTime - isfinTime:.3f}s')
-        # print(f'  weight time: {weightTime - probTime:.3f}s')
-        # print(f'  share time: {shareTime - weightTime:.3f}s')
-        # print(f'  cleanup time: {copyTime2 - shareTime:.3f}s')
-    
     return deriv
     
 def compute_shares (price, supply, alt_income, choiceidx, hhidx, non_price_utilities, price_income_transformation, price_income_params, budget_coef,
         max_rent_to_income, weights):
     alt_price = price[choiceidx]
-    budgets = price_income_transformation.apply(alt_income, alt_price, *price_income_params)
+
+    # unfortunately feasible alts does need to be recalculated on each iter as prices may change
+    if max_rent_to_income is None:
+        feasible_alts = np.full_like(alt_price, True)
+    else:
+        feasible_alts = alt_income * max_rent_to_income > alt_price
+
+    budgets = np.zeros_like(alt_price)
+    budgets[feasible_alts] = price_income_transformation.apply(alt_income[feasible_alts], alt_price[feasible_alts], *price_income_params)
     full_utilities = non_price_utilities + budget_coef * budgets
-    expUtility = np.exp(full_utilities)
+    exp_utility = np.exp(full_utilities)
+    exp_utility[~feasible_alts] = 0 # will force choice probability to zero for infeasible alts
+    
+    if not np.all(np.isfinite(exp_utility)):
+        raise FloatingPointError('Not all exp(utilities) are finite (scaling?)')
 
-    if max_rent_to_income is not None:
-        # setting expUtility to zero means choice probability will be 0, and choice will also not be added to the logsum
-        expUtility[alt_income * max_rent_to_income <= alt_price] = 0
-
-    if not np.all(np.isfinite(expUtility)):
-        print('Not all exp(utilities) are finite (scaling?)')
-        return np.array([]) # will cause error, and hopefully someone will see message above - work around numba limitation on raising
-
-    logsums = np.bincount(hhidx, weights=expUtility)
-    probs = expUtility / logsums[hhidx]
+    expsums = np.bincount(hhidx, weights=exp_utility)
+    probs = exp_utility / expsums[hhidx]
 
     if weights is not None:
         probs *= weights[hhidx]

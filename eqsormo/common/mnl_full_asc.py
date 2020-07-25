@@ -22,6 +22,7 @@ import pandas as pd
 import statsmodels.tools.numdiff
 
 from .compute_ascs import compute_ascs
+from .util import human_time
 
 LOG = getLogger(__name__)
 
@@ -34,13 +35,16 @@ class MNLFullASC(object):
     This class estimates such multinomial logit models.
     '''
 
-    def __init__ (self, utility, supply, hhidx, choiceidx, chosen, starting_values, method='L-BFGS-B', asc_convergence_criterion=1e-6, param_names=None):
+    def __init__ (self, utility, supply, hhidx, choiceidx, chosen, starting_values, method='L-BFGS-B', asc_convergence_criterion=1e-6, param_names=None, est_ses=True):
         '''
         :param utility: Function that returns utility for all choice alternatives and decisionmakers for a given set of parameters, not including ASCs. Receives parameters as a numpy array. Should return a MultiIndexed-pandas dataframe with indices called 'decisionmaker' and 'choice'
         :type utility: function
 
-        :param supply: Supply of each choice in equilibrium
-        :type supply: Pandas series, indexed with choice alternatives (like return value of utility function)
+        :param supply: List of supply of each choice in equilibrium, for each choice margin (choice margins may be simple or joint)
+        :type supply: List of np.array
+
+        :param choiceidx: List of arrays of what choice a particular utility is for, on each margin
+        :type choiceidx: List of np.array
 
         :param starting_values: starting values for parameters
         :type starting_values: numpy array
@@ -58,42 +62,43 @@ class MNLFullASC(object):
         self.hhidx = hhidx
         self.choiceidx = choiceidx
         self.chosen = chosen
+        self.est_ses = est_ses
 
-    def compute_ascs (self, baseUtilities, params):
+    def compute_ascs (self, base_utilities):
         '''
-        Compute alternative specific constants implied by params.
+        Compute alternative specific constants implied by base_utilities.
 
         Uses a contraction mapping found in equation 16 of Bayer et al 2004.
         '''
         startTime = time.perf_counter()
-        if self._previous_ascs is not None:
-            ascs = self._previous_ascs
-        else:
-            ascs = np.zeros(self.choiceidx.max() + 1)
 
-        ascs = compute_ascs(baseUtilities, self.supply, self.hhidx, self.choiceidx, starting_values=ascs, convergence_criterion=self.asc_convergence_criterion)
+        ascs = compute_ascs(base_utilities, self.supply, self.hhidx, self.choiceidx, starting_values=self._previous_ascs, convergence_criterion=self.asc_convergence_criterion)
         self._previous_ascs = ascs # speed convergence later
 
         endTime = time.perf_counter()
-        self.asc_time += (endTime - startTime)
+        totalTime = endTime - startTime
+        #LOG.info(f'found ASCs in {human_time(totalTime)}')
+        self.asc_time += totalTime
         return ascs
 
     def full_utility (self, params):
         'Full utilities including ASCs'
-        baseUtilities = self.utility(params)
-        ascs = self.compute_ascs(baseUtilities, params)
-        if len(ascs) == 1: # after error in underlying compute_ascs step
-            print(params)
-        fullUtilities = baseUtilities + ascs[self.choiceidx]
-        return fullUtilities
+        base_utilities = self.utility(params)
+        #LOG.info(f'Computed base utilities in {human_time(end_time - start_time)}')
+        ascs = self.compute_ascs(base_utilities)
+        full_utilities = base_utilities
+        for margin in range(len(ascs)):
+            # okay to use += here, base utilities will not be used again
+            full_utilities += ascs[margin][self.choiceidx[margin]]
+        return full_utilities
 
     def probabilities (self, params):
         utility = self.full_utility(params)
-        expUtility = np.exp(utility)
-        if not np.all(np.isfinite(expUtility)):
-            raise ValueError('Household/choice combinations ' + str(expUtility.index[~np.isfinite(expUtility)]) + ' have non-finite utilities!')
-        logsums = np.bincount(self.hhidx, weights=expUtility)
-        return expUtility / logsums[self.hhidx]
+        exp_utility = np.exp(utility)
+        if not np.all(np.isfinite(exp_utility)):
+            raise ValueError('Household/choice combinations ' + str(exp_utility.index[~np.isfinite(exp_utility)]) + ' have non-finite utilities!')
+        logsums = np.bincount(self.hhidx, weights=exp_utility)
+        return exp_utility / logsums[self.hhidx]
 
     def choice_probabilities (self, params):
         probabilities = self.probabilities(params)
@@ -103,7 +108,18 @@ class MNLFullASC(object):
         negll = -np.sum(np.log(self.choice_probabilities(params)))
         if np.isnan(negll) or not np.isfinite(negll):
             LOG.warn('log-likelihood nan or not finite, for params:\n' + str(params)) # just warn, solver may be able to get out of this
+        #LOG.info(f'Current negative log likelihood: {negll:.2f}')
         return negll
+
+    # some optimizers call with a second state arg, some do not. be lenient.
+    def log_progress (self, params, state=None):
+        negll = self.negative_log_likelihood(params)
+        improvement = negll - self._prev_ll
+        LOG.info(f'After iteration {self._iteration}, -ll {negll:.7f}, change: {improvement:.7f}')
+        self.negll_for_iteration.append(negll)
+        self.params_for_iteration.append(np.copy(params))
+        self._prev_ll = negll
+        self._iteration += 1
 
     def fit (self):
         LOG.info('Fitting multinomial logit model')
@@ -115,60 +131,86 @@ class MNLFullASC(object):
             LOG.warn('not all starting values are zero, log likelihood at constants is actually log likelihood at starting values and may be incorrect')
         self.loglik_constants = -self.negative_log_likelihood(self.starting_values)
 
-
+        self._iteration = 0
+        self._prev_ll = -self.loglik_constants
+        self.params_for_iteration = []
+        self.negll_for_iteration = []
+        LOG.info(f'Before iteration 0, -ll {self._prev_ll:.7f}')
         minResults = scipy.optimize.minimize(
             self.negative_log_likelihood,
             self.starting_values,
             method=self.method,
-            options={'disp': True}
+            options={'disp': True},
+            callback=self.log_progress
         )
+        self.params_for_iteration = np.array(self.params_for_iteration)
+        self.negll_for_iteration = np.array(self.negll_for_iteration)
 
-        LOG.info('calculating and inverting Hessian')
-        hess = statsmodels.tools.numdiff.approx_hess3(minResults.x, self.negative_log_likelihood)
-        hessInv = np.linalg.inv(hess)
-        ses = np.sqrt(np.diag(hessInv))
-        LOG.info('done calculating and inverting Hessian')
+        if self.est_ses:
+            LOG.info('calculating and inverting Hessian')
+            # TODO robust SEs
+            hess = statsmodels.tools.numdiff.approx_hess3(minResults.x, self.negative_log_likelihood)
+            hessInv = np.linalg.inv(hess)
+            ses = np.sqrt(np.diag(hessInv))
+            LOG.info('done calculating and inverting Hessian')
+        else:
+            LOG.info('Not calculating Hessian because standard errors were not requested')
 
         self.loglik_beta = -self.negative_log_likelihood(minResults.x)
         if self.param_names is None:
             self.params = minResults.x
-            self.se = ses
+            if self.est_ses:
+                self.se = ses
         else:
             self.params = pd.Series(minResults.x, index=self.param_names)
-            self.se = pd.Series(ses, index=self.param_names)
+            if self.est_ses:
+                self.se = pd.Series(ses, index=self.param_names)
 
         # TODO compute t-stats
-        self.zvalues = self.params / self.se
-        self.pvalues = scipy.stats.norm.cdf(1 - np.abs(self.zvalues))
+        if self.est_ses:
+            self.zvalues = self.params / self.se
+            # two-tailed test
+            self.pvalues = 2 * scipy.stats.norm.cdf(-np.abs(self.zvalues))
 
-        # TODO robust SEs
-        self.ascs = self.compute_ascs(self.utility(minResults.x), minResults.x)
+        self.ascs = self.compute_ascs(self.utility(minResults.x))
         self.converged = minResults.success
 
         endTime = time.perf_counter()
         if self.converged:
-            LOG.info(f'Multinomial logit model converged in {endTime - startTime:.3f} seconds: {minResults.message}')
+            LOG.info(f'Multinomial logit model converged in {human_time(endTime - startTime)}: {minResults.message}')
         else:
-            LOG.error(f'Multinomial logit model FAILED TO CONVERGE in {endTime - startTime:.3f} seconds: {minResults.message}')
-        LOG.info(f'  Finding ASCs took {self.asc_time:.3f} seconds')
-
+            LOG.error(f'Multinomial logit model FAILED TO CONVERGE in {human_time(endTime - startTime)}: {minResults.message}')
+        LOG.info(f'  Finding ASCs took {human_time(self.asc_time)}')
 
     def summary (self):
-        summ = pd.DataFrame({
-            'coef': self.params,
-            'se': self.se,
-            'z': self.zvalues,
-            'p': self.pvalues
-        }).round(3)
+        notes = []
+        if self.est_ses:
+            summ = pd.DataFrame({
+                'coef': self.params,
+                'se': self.se,
+                'z': self.zvalues,
+                'p': self.pvalues
+            }).round(3)
+        else:
+            summ = pd.DataFrame({'coef': self.params}).round(3)
+            notes.append('Standard errors not estimated')
+
+        if not self.converged:
+            notes.append('WARNING: CONVERGENCE NOT ACHIEVED.')
 
         chi2 = 2 * (self.loglik_beta - self.loglik_constants)
         chi2df = len(self.params)
         pchi2 = 1 - scipy.stats.chi2.cdf(chi2, df=chi2df)
 
+        # get around f-string cannot include backslash error
+        newline = '\n'
+
         return f'''
 Multinomial logit model with full ASCs
 Parameters:
 {str(summ)}
+Notes:
+{newline.join(notes)}
 
 Log likelihood at constants: {self.loglik_constants:.3f}
 Log likelihood at convergence: {self.loglik_beta:.3f}
