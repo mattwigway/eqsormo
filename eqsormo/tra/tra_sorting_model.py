@@ -683,6 +683,10 @@ class TraSortingModel(BaseSortingModel):
     def savenew (self, basefile):
         save_load.save(basefile, self)
 
+    @classmethod
+    def loadnew (cls, basefile):
+        return save_load.load(basefile)
+
     def to_text (self, fn=None):
         "Save model results as text. If fn==None, return as string"
 
