@@ -55,7 +55,7 @@ FIELDS = [
  ]
 
 def save (basefile, model):
-    model_uuid = uuid.uuid4().hex()
+    model_uuid = uuid.uuid4().hex
 
     pickle_fields = {
         'MODEL_VERSION': MODEL_VERSION,
