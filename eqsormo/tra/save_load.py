@@ -62,8 +62,8 @@ def save (basefile, model):
         'MODEL_ID': model_uuid
     }
     numpy_fields = {
-        'MODEL_VERSION': np.array(MODEL_VERSION),
-        'MODEL_ID': model_uuid
+        'MODEL_VERSION': np.array([MODEL_VERSION]),
+        'MODEL_ID': np.array([model_uuid])
     }
 
     for field in FIELDS:
