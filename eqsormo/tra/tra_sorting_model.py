@@ -30,6 +30,7 @@ from eqsormo.common import BaseSortingModel, MNLFullASC
 from eqsormo.common.util import human_bytes, human_time, human_shape
 from eqsormo.common.compute_ascs import compute_ascs
 import eqsormo
+from . import save_load
 
 LOG = getLogger(__name__)
 
@@ -678,6 +679,9 @@ class TraSortingModel(BaseSortingModel):
 
     def uneq_mkt_shares (self):
         return pd.Series(self._uneq_mkt_shares(), index=self.unequilibrated_choice_xwalk.index)
+
+    def savenew (self, basefile):
+        save_load.save(basefile, self)
 
     def to_text (self, fn=None):
         "Save model results as text. If fn==None, return as string"

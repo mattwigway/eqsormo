@@ -219,3 +219,7 @@ Chi2 (vs constants): {chi2}, {chi2df} degrees of freedom
 P(Chi2): {pchi2}
         '''
 
+    # don't pickle big arrays
+    def __getstate__ (self):
+        return {k: v for k, v in self.__dict__.items() if k not in {'hhidx', 'choiceidx', 'chosen'}}
+
