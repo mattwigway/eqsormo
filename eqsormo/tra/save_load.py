@@ -91,7 +91,7 @@ def load (basefile):
         # TODO npz model version not saved correctly so not checked
         raise ValueError(f'Model version {pkl["MODEL_VERSION"]} does not match model version {MODEL_VERSION}')
 
-    if pkl['MODEL_UUID'] != npz['MODEL_UUD'][0]:
+    if pkl['MODEL_ID'] != npz['MODEL_ID'][0]:
         raise ValueError('Model UUIDs do not match')
 
     def get (field):
