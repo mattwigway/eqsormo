@@ -3,6 +3,7 @@ MODEL_VERSION = 0
 import numpy as np
 import dill
 import logging
+import uuid
 
 LOG = logging.getLogger(__name__)
 
@@ -54,11 +55,15 @@ FIELDS = [
  ]
 
 def save (basefile, model):
+    model_uuid = uuid.uuid4().hex()
+
     pickle_fields = {
-        'MODEL_VERSION': MODEL_VERSION
+        'MODEL_VERSION': MODEL_VERSION,
+        'MODEL_ID': model_uuid
     }
     numpy_fields = {
-        'MODEL_VERSION': MODEL_VERSION
+        'MODEL_VERSION': np.array(MODEL_VERSION),
+        'MODEL_ID': model_uuid
     }
 
     for field in FIELDS:
@@ -82,9 +87,12 @@ def load (basefile):
     
     npz = np.load(f'{basefile}.npz')
 
-    if pkl['MODEL_VERSION'] != MODEL_VERSION: # or npz['MODEL_VERSION'][0] != MODEL_VERSION:
+    if pkl['MODEL_VERSION'] != MODEL_VERSION or npz['MODEL_VERSION'][0] != MODEL_VERSION:
         # TODO npz model version not saved correctly so not checked
         raise ValueError(f'Model version {pkl["MODEL_VERSION"]} does not match model version {MODEL_VERSION}')
+
+    if pkl['MODEL_UUID'] != npz['MODEL_UUD'][0]:
+        raise ValueError('Model UUIDs do not match')
 
     def get (field):
         if field in pkl:
