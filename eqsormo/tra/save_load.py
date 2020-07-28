@@ -11,6 +11,7 @@ LOG = logging.getLogger(__name__)
 # everything else. This will hopefully work until we can come up with something better...
 
 FIELDS = [
+ 'alternatives_colnames',
  'choice',
  'creation_time',
  'est_first_stage_ses',
@@ -24,7 +25,6 @@ FIELDS = [
  'full_hsgchosen',
  'full_uneqchoiceidx',
  'full_uneqchosen',
- 'full_utility',
  'hh_hsg_choice',
  'hh_unequilibrated_choice',
  'hh_xwalk',
