@@ -16,7 +16,6 @@
 
 import numba
 import numpy as np
-from tqdm import tqdm
 from time import time
 
 from logging import getLogger
