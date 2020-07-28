@@ -12,6 +12,7 @@ LOG = logging.getLogger(__name__)
 
 FIELDS = [
  'alternatives_colnames',
+ 'alternatives_stds',
  'choice',
  'creation_time',
  'est_first_stage_ses',
