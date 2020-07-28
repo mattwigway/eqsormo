@@ -230,9 +230,12 @@ class TraSortingModel(BaseSortingModel):
             feasible_alts = alt_income * self.max_rent_to_income > alt_price
         else:
             feasible_alts = np.full(len(alt_income), True)
+
+        LOG.info(f'{np.sum(feasible_alts)} options appear in choice sets')
         
         budget = np.full(len(hhidx), np.nan)
         budget[feasible_alts] = self.price_income_transformation.apply(alt_income[feasible_alts], alt_price[feasible_alts], *price_income_params)
+        assert not np.any(np.isnan(budget[feasible_alts])) # should be no nans left
         alternatives[:,current_col] = budget
         current_col += 1
         del alt_income, alt_price, budget # save memory
@@ -657,14 +660,14 @@ class TraSortingModel(BaseSortingModel):
         return probs
 
     def probabilities (self):
-        'Return choice probabilities as Pandas dataframe, indexed by household ID, choice ID, and uneq choice ID'
+        'Return choice probabilities as Pandas dataframe, with columns for household ID, choice ID, and uneq choice ID'
         probs = self._probabilities()
-        idx = pd.MultiIndex.from_tuples(list(zip(
-            self.hh_xwalk.index[self.full_hhidx],
-            self.housing_xwalk.index[self.full_choiceidx],
-            self.unequilibrated_choice_xwalk.index[self.full_uneqchoiceidx]
-        )))
-        return pd.Series(probs, index=idx)
+        return pd.DataFrame({
+            'hh': self.hh_xwalk.index[self.full_hhidx],
+            'housing': self.housing_xwalk.index[self.full_choiceidx],
+            'uneq_choice': self.unequilibrated_choice_xwalk.index[self.full_uneqchoiceidx],
+            'probability': probs
+        })
 
     def _mkt_shares (self):
         probs = self._probabilities() * self.weights.loc[self.hh_xwalk.index].values[self.full_hhidx]
