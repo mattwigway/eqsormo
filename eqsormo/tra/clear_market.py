@@ -37,98 +37,96 @@ def clear_market (non_price_utilities, hhidx, choiceidx, supply, income, startin
         origNExcluded = np.sum(alt_income * max_rent_to_income <= price[choiceidx])
 
     prev_price = np.copy(price)
-    with tqdm() as pbar:
-        itr = 0
-        while True:
-            itr += 1
-            if itr > maxiter:
-                LOG.error(f'Prices FAILED TO CONVERGE in {maxiter} iterations!')
-                return price
 
-            if max_rent_to_income is not None:
-                # could cause oscillation if price keeps going above max income
-                # Also, this will affect sorting equilibrium, because the price may effectively get fixed to the
-                # 90th percentile income because it always moves off, and everything else equilibrate around it
-                if np.any(price > np.max(income) * max_rent_to_income):
-                    LOG.error('Some prices have exceeded max income - setting to be affordable to 90th percentile household to keep process going.')
-                    price[price > np.max(income) * max_rent_to_income] = np.percentile(income, 0.9) * max_rent_to_income
+    itr = 0
+    while True:
+        itr += 1
+        if itr > maxiter:
+            LOG.error(f'Prices FAILED TO CONVERGE in {maxiter} iterations!')
+            return price
 
-            shares = compute_shares(
-                price=price,
-                supply=supply,
-                alt_income=alt_income,
-                choiceidx=choiceidx,
-                hhidx=hhidx,
-                non_price_utilities=non_price_utilities,
-                price_income_transformation=price_income_transformation,
-                price_income_params=price_income_params,
-                budget_coef=budget_coef,
-                max_rent_to_income=max_rent_to_income,
-                weights=weights
-            )
+        if max_rent_to_income is not None:
+            # could cause oscillation if price keeps going above max income
+            # Also, this will affect sorting equilibrium, because the price may effectively get fixed to the
+            # 90th percentile income because it always moves off, and everything else equilibrate around it
+            if np.any(price > np.max(income) * max_rent_to_income):
+                LOG.error('Some prices have exceeded max income - setting to be affordable to 90th percentile household to keep process going.')
+                price[price > np.max(income) * max_rent_to_income] = np.percentile(income, 0.9) * max_rent_to_income
 
-            if np.any(shares == 0):
-                raise ValueError('Some shares are zero.')
+        shares = compute_shares(
+            price=price,
+            supply=supply,
+            alt_income=alt_income,
+            choiceidx=choiceidx,
+            hhidx=hhidx,
+            non_price_utilities=non_price_utilities,
+            price_income_transformation=price_income_transformation,
+            price_income_params=price_income_params,
+            budget_coef=budget_coef,
+            max_rent_to_income=max_rent_to_income,
+            weights=weights
+        )
 
-            excess_demand = shares - supply
+        if np.any(shares == 0):
+            raise ValueError('Some shares are zero.')
 
-            #maxdiff = np.max(np.abs(shares - supply) / supply)
-            maxdiff = np.max(np.abs(excess_demand / supply))
-            if maxdiff < convergence_criterion:
-                LOG.info(f'Prices converged after {itr} iterations')
-                return price
+        excess_demand = shares - supply
 
-            # probably will need to remove if using numba
-            maxpricediff = np.max(price - prev_price)
-            minpricediff = np.min(price - prev_price)
-            prev_price[:] = price
-            if max_rent_to_income is not None:
-                deltaNExcluded = np.sum(alt_income * max_rent_to_income <= price[choiceidx]) - origNExcluded
-            else:
-                deltaNExcluded = 'n/a'
-            pbar.set_postfix({'max_unit_diff': maxdiff, 'max_price_diff': maxpricediff, 'min_price_diff': minpricediff, 'additional_excluded': deltaNExcluded}, refresh=False)
+        #maxdiff = np.max(np.abs(shares - supply) / supply)
+        maxdiff = np.max(np.abs(excess_demand / supply))
+        if maxdiff < convergence_criterion:
+            LOG.info(f'Prices converged after {itr} iterations')
+            return price
 
-            # Use the approach defined in Tra (2007), page 108, eq. 7.7/7.7a, which is copied from Anas (1982)
-            # first, compute derivative. Since the budget transformation is an arbitrary Python function, first compute its derivative.
-            # since the budgets are independent between houses and between choosers, this is a fast numpy vectorized operation. We need a
-            # loop to compute derivatives of budget. That can be done as a numpy vectorized operation
-            alt_price = price[choiceidx]
+        # probably will need to remove if using numba
+        maxpricediff = np.max(price - prev_price)
+        minpricediff = np.min(price - prev_price)
+        prev_price[:] = price
+        if max_rent_to_income is not None:
+            deltaNExcluded = np.sum(alt_income * max_rent_to_income <= price[choiceidx]) - origNExcluded
+        else:
+            deltaNExcluded = 'n/a'
 
-            budget = np.zeros_like(alt_income)
-            if max_rent_to_income is None:
-                feasible_alts = np.full_like(alt_price, True)
-            else:
-                feasible_alts = alt_income * max_rent_to_income > alt_price
+        # Use the approach defined in Tra (2007), page 108, eq. 7.7/7.7a, which is copied from Anas (1982)
+        # first, compute derivative. Since the budget transformation is an arbitrary Python function, first compute its derivative.
+        # since the budgets are independent between houses and between choosers, this is a fast numpy vectorized operation. We need a
+        # loop to compute derivatives of budget. That can be done as a numpy vectorized operation
+        alt_price = price[choiceidx]
 
-            budget = np.full_like(alt_income, np.nan)
-            budget[feasible_alts] = price_income_transformation.apply(alt_income[feasible_alts], alt_price[feasible_alts], *price_income_params)
-            price_step = 1e-8
-            budget_step = np.full_like(alt_income, np.nan)
+        budget = np.zeros_like(alt_income)
+        if max_rent_to_income is None:
+            feasible_alts = np.full_like(alt_price, True)
+        else:
+            feasible_alts = alt_income * max_rent_to_income > alt_price
 
-            if max_rent_to_income is None:
-                feasible_alts_step = np.full_like(alt_price, True)
-            else:
-                feasible_alts_step = alt_income * max_rent_to_income > alt_price
-            budget_step[feasible_alts] = price_income_transformation.apply(alt_income[feasible_alts_step], alt_price[feasible_alts_step] + price_step, *price_income_params)
+        budget = np.full_like(alt_income, np.nan)
+        budget[feasible_alts] = price_income_transformation.apply(alt_income[feasible_alts], alt_price[feasible_alts], *price_income_params)
+        price_step = 1e-8
+        budget_step = np.full_like(alt_income, np.nan)
 
-            # fix one price from changing
-            # TODO pick price in a smarter way (PUMA with least change?)
-            # Appears to be causing convergence problems.
-            #excess_demand[0] = 0
+        if max_rent_to_income is None:
+            feasible_alts_step = np.full_like(alt_price, True)
+        else:
+            feasible_alts_step = alt_income * max_rent_to_income > alt_price
+        budget_step[feasible_alts] = price_income_transformation.apply(alt_income[feasible_alts_step], alt_price[feasible_alts_step] + price_step, *price_income_params)
 
-            # NB derivatives are ill-behaved at the boundary where a choice enters a household's choice set due to the price dropping below their
-            # income. We assume that what is in each household's choice set is nonchanging for the purpose of calculating derivatives.
-            # Nope, that won't work.
-            deriv = compute_derivatives(price, alt_income, choiceidx, hhidx, non_price_utilities, budget, budget_step, price_step, budget_coef,
-                shares, max_rent_to_income, feasible_alts, feasible_alts_step, weights)
-        
-            if not np.all(deriv < 0):
-                raise ValueError('some derivatives of price are nonnegative')
+        # fix one price from changing
+        # TODO pick price in a smarter way (PUMA with least change?)
+        # Appears to be causing convergence problems.
+        #excess_demand[0] = 0
 
-            # this is 7.7a from Tra's dissertation
-            price = price - (excess_demand / deriv)
+        # NB derivatives are ill-behaved at the boundary where a choice enters a household's choice set due to the price dropping below their
+        # income. We assume that what is in each household's choice set is nonchanging for the purpose of calculating derivatives.
+        # Nope, that won't work.
+        deriv = compute_derivatives(price, alt_income, choiceidx, hhidx, non_price_utilities, budget, budget_step, price_step, budget_coef,
+            shares, max_rent_to_income, feasible_alts, feasible_alts_step, weights)
+    
+        if not np.all(deriv < 0):
+            raise ValueError('some derivatives of price are nonnegative')
 
-            pbar.update()
+        # this is 7.7a from Tra's dissertation
+        price = price - (excess_demand / deriv)
+        LOG.info(f'After iteration {itr}, max unit diff: {maxdiff}, max price diff: {maxpricediff}, min price diff: {minpricediff}, additional excluded due to rent/income ration {deltaNExcluded}')
 
 #@numba.jit(nopython=True) seems to slow things down but I may just not be letting it warm up
 def compute_derivatives (price, alt_income, choiceidx, hhidx, non_price_utilities, budget, budget_step, price_step, budget_coef, base_shares, max_rent_to_income,
