@@ -17,7 +17,7 @@
 import numpy as np
 import numba
 
-@numba.jit(nopython=True)
+#@numba.jit(nopython=True)
 def compute_ascs (base_utilities, supply, hhidx, choiceidx, starting_values=None, convergence_criterion=1e-6, weights=None):
     '''
     Compute the alternative specific constants (ASCs) that should be added to base_utilities to make the market shares equal supply.
