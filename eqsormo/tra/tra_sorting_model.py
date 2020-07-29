@@ -588,7 +588,8 @@ class TraSortingModel(BaseSortingModel):
         # convert supply to an np array
         supply = self.weighted_supply.loc[self.housing_xwalk.index].values
 
-        if not np.sum(supply) == np.sum(self.weights):
+        # allow for slight floating point error several orders of magnitude smaller than convergence criterion
+        if np.abs(np.sum(supply) - np.sum(self.weights)) > 1e-8:
             raise ValueError(f'total supply has changed! expected {np.sum(self.weights)} but found {np.sum(supply)}')
 
         # first update second stage
