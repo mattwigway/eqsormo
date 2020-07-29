@@ -1,4 +1,4 @@
-#    Copyright 2019 Matthew Wigginton Conway
+#    Copyright 2019-2020 Matthew Wigginton Conway
 
 #    Licensed under the Apache License, Version 2.0 (the "License");
 #    you may not use this file except in compliance with the License.
@@ -17,7 +17,7 @@ import logging
 from .tra import TraSortingModel
 from . import tra
 
-version = '0.2.2'
+version = '0.2.3'
 
 rootLogger = None
 
