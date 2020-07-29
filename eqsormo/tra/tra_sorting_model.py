@@ -589,7 +589,7 @@ class TraSortingModel(BaseSortingModel):
         supply = self.weighted_supply.loc[self.housing_xwalk.index].values
 
         if not np.sum(supply) == np.sum(self.weights):
-            raise ValueError('total supply has changed!')
+            raise ValueError(f'total supply has changed! expected {np.sum(self.weights)} but found {np.sum(supply)}')
 
         # first update second stage
         if self.second_stage_params is not None:
