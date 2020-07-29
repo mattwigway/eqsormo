@@ -86,7 +86,7 @@ def load (basefile):
     with open(f'{basefile}.pickle', 'rb') as inp:
         pkl = dill.load(inp)
     
-    npz = np.load(f'{basefile}.npz')
+    npz = np.load(f'{basefile}.npz', allow_pickle=False)
 
     if pkl['MODEL_VERSION'] != MODEL_VERSION or npz['MODEL_VERSION'][0] != MODEL_VERSION:
         # TODO npz model version not saved correctly so not checked
