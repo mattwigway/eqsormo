@@ -77,6 +77,7 @@ def save (basefile, model):
     with open(f'{basefile}.pickle', 'wb') as out:
         dill.dump(pickle_fields, out)
 
+    # TODO any way to set allow_pickle=False here?
     np.savez_compressed(f'{basefile}.npz', **numpy_fields)
 
 def load (basefile):
