@@ -62,7 +62,7 @@ class TraSortingModel(BaseSortingModel):
         :param interactions: Which household attributes should be interacted with which housing attributes in the first stage
         :type interactions: iterable of tuple (household_attributes column, housing_attributes column)
 
-        :params second_stage_params: Which housing attributes to include in the second stage fit (decomposition of mean parameters). If None, don't fit a second stage (this is not necessary for simulation).
+        :param second_stage_params: Which housing attributes to include in the second stage fit (decomposition of mean parameters). If None, don't fit a second stage (this is not necessary for simulation).
         :type second_stage_params: iterable of string
 
         :param price: Observed price of each housing choice. This price should be over the same time period as income (for example, annualized prices with annual incomes)

@@ -14,6 +14,8 @@
 
 # Author: Matthew Wigginton Conway <matt@indicatrix.org>, School of Geographical Sciences and Urban Planning, Arizona State University
 
+# TODO Do we need this file anymore?
+
 from logging import getLogger
 import time
 import statsmodels.api as sm

@@ -14,6 +14,8 @@
 
 # Author: Matthew Wigginton Conway <matt@indicatrix.org>, School of Geographical Sciences and Urban Planning, Arizona State University
 
+# TODO is this file still needed?
+
 import numpy as np
 from tqdm import tqdm
 import pandas as pd

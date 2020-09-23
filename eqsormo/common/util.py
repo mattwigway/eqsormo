@@ -20,6 +20,7 @@ byte_scalars = {
 }
 
 def human_bytes (nbytes):
+    'Return bytes in human-readable format, e.g. 1.42GB'
     for suffix, scalar in byte_scalars.items():
         if nbytes > scalar:
             return f'{nbytes / scalar:.2f} {suffix}'
@@ -27,6 +28,7 @@ def human_bytes (nbytes):
     return f'{nbytes} bytes'
     
 def human_time (seconds):
+    'Time in human readable format, e.g. 3630 -> 1h0m30s'
     ret = []
     if seconds >= 3600:
         ret.append(f'{int(seconds // 3600)}h')
@@ -39,4 +41,5 @@ def human_time (seconds):
     return ' '.join(ret)
 
 def human_shape (shape):
+    'Shape of a numpy array in human-readable format, e.g. 2x2'
     return 'x'.join(map(str, shape))
