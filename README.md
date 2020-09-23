@@ -4,7 +4,7 @@ Eqsormo implements equilibrium sorting models in Python. Equilibrium sorting mod
 
 It currently supports discrete-choice-based sorting models, specifically of the type implemented by Tra (2007, 2010, 2013), wherein the price enters the first stage of the model as a nonlinear budget term. This is in contrast to much of the literature where a constant price coefficient is estimated in the second stage. The advantage of the Tra approach is that by including price in the first stage, where there are also fixed effects for all housing types, there is less concern about unobserved housing attributes being correlated with price.
 
-Eqsormo is currently alpha-stage software. Any results should be carefully evaluated, and issues reported to [the issue tracker](https://github.com/mattwigway/eqsormo/issues).
+Eqsormo is currently alpha-stage software. Any results should be carefully evaluated, and issues reported to [the issue tracker](https://github.com/mattwigway/eqsormo/issues). API documentation [is available on readthedocs](https://eqsormo.readthedocs.io/en/latest/api.html#api); additional documentation is forthcoming.
 
 ## References
 
