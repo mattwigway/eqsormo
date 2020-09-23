@@ -4,6 +4,7 @@ setup(
     name='eqsormo',
     version='0.2.3',
     packages=find_packages(),
+    requirements=['statsmodels>=0.11', 'tqdm>=4.0', 'numba>=0.51', 'numpy>=1.0', 'pandas>=1.0', 'dill>=0.3', 'scipy>=1.5'],
     author='Matthew Wigginton Conway',
     author_email='matt@indicatrix.org',
     description='Equilibrium sorting models in Python',
