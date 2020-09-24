@@ -68,10 +68,12 @@ sqrtdiff = FunctionalForm(lambda income, price: np.sqrt(income - price), 'sqrt(i
 # box-cox transform of income - price
 # Box and Cox (1964)
 # NB any price > income should be taken care of by a max_rent_to_income parameter
+# TODO can we remove the max rent to income param here?
 boxcoxdiff = FunctionalForm(lambda income, price, lmbda: scipy.stats.boxcox(np.maximum(income - price, 1), lmbda=lmbda), 'boxcox(income - price)',
      n_params=1, param_names=['boxcox_lambda'])
 
 # Form suggested by Stephane Hess in his advanced discrete choice modelling class, London, UK, July 2019
 # Note that this will not behave right if called on a subset of the data, since it uses the mean of income
-hess = FunctionalForm(lambda income, price, hess_lambda: ((income / np.mean(income)) ** hess_lambda) * price,
-    'Hess: (income / mean(income)) ^ lambda * price', n_params=1, param_names=['hess_lambda'], starting_values=[-1])
+# Removed because these functions are now always called on subsets
+# hess = FunctionalForm(lambda income, price, hess_lambda: ((income / np.mean(income)) ** hess_lambda) * price,
+#     'Hess: (income / mean(income)) ^ lambda * price', n_params=1, param_names=['hess_lambda'], starting_values=[-1])
