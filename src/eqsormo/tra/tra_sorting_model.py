@@ -664,7 +664,7 @@ class TraSortingModel(BaseSortingModel):
         TODO document which data structures can be changed and still have this function return correct results
         '''
         LOG.info('Clearing the market and sorting households')
-        LOG.info("There's nothing hidden in your head / the Sorting Hat can't see / so try me on and I will tell you /'
+        LOG.info("There's nothing hidden in your head / the Sorting Hat can't see / so try me on and I will tell you /'\
                  ' where you ought to be.\n" +\
             "    -JK Rowling, Harry Potter and the Sorcerer's Stone")
 
