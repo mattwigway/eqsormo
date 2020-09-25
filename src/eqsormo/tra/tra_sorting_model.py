@@ -21,7 +21,6 @@ import time
 import statsmodels.api as sm
 import pandas as pd
 import numpy as np
-import scipy.optimize
 import datetime
 
 from . import price_income
@@ -708,7 +707,7 @@ class TraSortingModel(BaseSortingModel):
             # different alternatives are independent of each other and the budget is set to zero anyhow.
 
             startTimeClear = time.perf_counter()
-            new_prices = clear_market(
+            new_prices = clear_market_iter(
                 non_price_utilities=non_price_utilities,
                 hhidx=self.full_hhidx,
                 choiceidx=self.full_choiceidx,
