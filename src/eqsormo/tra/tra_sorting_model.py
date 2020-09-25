@@ -91,7 +91,7 @@ class TraSortingModel(BaseSortingModel):
 
         :param income: Household income
         :type income: Pandas series of numbers, indexed like household_attributes
-        
+
         :param choice: The choice made by the household. Should be index values in household_attributes
         :param type: Pandas series, indexed like household_attributes
 
@@ -148,7 +148,7 @@ class TraSortingModel(BaseSortingModel):
         self.unequilibrated_hsg_params = unequilibrated_hsg_params
         self.sample_alternatives = sample_alternatives
         self.alternatives_stds = None
-        
+
         if weights is None:
             self.weights = None
             self.weighted_supply = self.choice.value_counts()
@@ -185,7 +185,7 @@ class TraSortingModel(BaseSortingModel):
             choiceList = ' - ' + '\n - '.join(choiceCount.index[choiceCount == 0])
             LOG.error(f'Some housing alternatives are not chosen by any households!\n{choiceList}')
             allPassed = False
-        
+
         if (self.max_rent_to_income is not None
                 and not np.all(self.income.values * self.max_rent_to_income > self.price.loc[self.choice].values)):
             LOG.error('Some households pay more in rent than the max rent to income ratio')
@@ -254,7 +254,7 @@ class TraSortingModel(BaseSortingModel):
             price_income_params = self.price_income_starting_values
 
         assert len(hhidx) == len(choiceidx) and len(choiceidx) == len(uneqchoiceidx)
-        
+
         if self.household_housing_attributes is not None:
             assert hh_hsgidx is not None and len(hhidx) == len(hh_hsgidx)
 
@@ -270,7 +270,7 @@ class TraSortingModel(BaseSortingModel):
 
         if self.household_housing_attributes is not None:
             ncols += len(self.household_housing_attributes.columns)
-        
+
         LOG.info(f'Allocating alternatives array of size {human_bytes(len(hhidx) * ncols * 8)}')
         alternatives = np.zeros((len(hhidx), ncols))
 
@@ -288,7 +288,7 @@ class TraSortingModel(BaseSortingModel):
             feasible_alts = np.full(len(alt_income), True)
 
         LOG.info(f'{np.sum(feasible_alts)} options appear in choice sets')
-        
+
         budget = np.full(len(hhidx), np.nan)
         budget[feasible_alts] = self.price_income_transformation.apply(alt_income[feasible_alts], alt_price[feasible_alts], *price_income_params)
         assert not np.any(np.isnan(budget[feasible_alts])) # should be no nans left
@@ -313,7 +313,7 @@ class TraSortingModel(BaseSortingModel):
                 raise KeyError(f'{hsg_attr} is not a housing attribute, exogenous or endogenous')
             colnames.append(f'{hh_attr}:{hsg_attr}')
             current_col += 1
-        
+
         # now add the attributes for the unequilibrated choice
         for param in self.unequilibrated_hh_params:
             vals = self.household_attributes[param].astype('float64').values[hhidx]
@@ -334,7 +334,7 @@ class TraSortingModel(BaseSortingModel):
         if self.household_housing_attributes is not None:
             for c in self.household_housing_attributes.columns:
                 colnames.append(c)
-            
+
             alternatives[:,current_col:current_col + len(self.household_housing_attributes.columns)] =\
                 self.household_housing_attributes.values[hh_hsgidx, :]
             current_col += len(self.household_housing_attributes.columns)
@@ -345,7 +345,7 @@ class TraSortingModel(BaseSortingModel):
 
         if self.alternatives_stds is None:
             self.alternatives_stds = np.std(alternatives, axis=0)
-        
+
         alternatives /= self.alternatives_stds
 
         return alternatives
@@ -368,7 +368,7 @@ class TraSortingModel(BaseSortingModel):
         self.hh_unequilibrated_choice = self.unequilibrated_choice_xwalk.loc[self.unequilibrated_choice.loc[self.hh_xwalk.index]].values
 
         if self.endogenous_variable_defs is not None:
-            # neighborhood indices 
+            # neighborhood indices
             unique_neighborhoods = self.neighborhoods.unique()
             self.nbhd_xwalk = pd.Series(np.arange(len(unique_neighborhoods)), index=self.unique_neighborhoods)
             self.nbhd_for_choice = self.nbhd_xwalk.loc[self.housing_xwalk.index].values # index is sorted
@@ -385,7 +385,7 @@ class TraSortingModel(BaseSortingModel):
         self.full_hhidx = np.repeat(np.arange(len(self.household_attributes)), len(self.housing_attributes) * len(unique_unequilibrated_choices))
         self.full_choiceidx = np.repeat(np.tile(np.arange(len(self.housing_attributes)), len(self.household_attributes)), len(unique_unequilibrated_choices))
         self.full_uneqchoiceidx = np.tile(np.arange(len(unique_unequilibrated_choices)), len(self.housing_attributes) * len(self.household_attributes))
-        self.full_hsgchosen = (self.hh_hsg_choice[self.full_hhidx] == self.full_choiceidx) 
+        self.full_hsgchosen = (self.hh_hsg_choice[self.full_hhidx] == self.full_choiceidx)
         self.full_uneqchosen = (self.hh_unequilibrated_choice[self.full_hhidx] == self.full_uneqchoiceidx)
         self.full_chosen = self.full_hsgchosen & self.full_uneqchosen
 
@@ -498,7 +498,7 @@ class TraSortingModel(BaseSortingModel):
         # unequilibrated alternatives do not
         # TODO could move this calculation into MNLFullASC
         utils += self._log_supply
-        
+
         return utils
 
     def chunked_full_alternatives (self, price_income_params):
@@ -676,7 +676,7 @@ class TraSortingModel(BaseSortingModel):
         if self.second_stage_params is not None:
             LOG.info('updating second stage')
             pred_ascs = self.second_stage_fit.predict(sm.add_constant(self.housing_attributes[self.second_stage_params])) + self.type_shock
-            
+
             maxabsdiff = np.max(np.abs(pred_ascs - self.first_stage_ascs))
             LOG.info(f'Second stage updated with changes to first-stage ASCs of up to {maxabsdiff:.2f}')
             self.first_stage_ascs = pred_ascs
@@ -748,7 +748,7 @@ class TraSortingModel(BaseSortingModel):
             else:
                 # if model is already fitted, update endogenous variables with fitted values
                 LOG.info('updating endogenous variables')
-                weighted_probs = self._probabilities() 
+                weighted_probs = self._probabilities()
 
             if self.weights is not None:
                 # if weights are present, use them
@@ -772,7 +772,7 @@ class TraSortingModel(BaseSortingModel):
                 np.nan,
                 'float64'
             )
-            
+
             # compute endogenous variables
             for neighborhood in range(np.max(self.nbhd_for_choice)):
                 nbhdmask = nbhdidx == neighborhood
@@ -785,7 +785,7 @@ class TraSortingModel(BaseSortingModel):
                 for i, varname in enumerate(self.endogenous_varnames):
                     func = self.endogenous_variable_defs[varname]
                     self.endogenous_variables[neighborhood, i] = func(self.household_attributes, hhweights)
-            
+
             # check our work
             assert not np.any(np.isnan(self.endogenous_variables)), 'some endogenous variables are nan!'
 
@@ -828,7 +828,7 @@ class TraSortingModel(BaseSortingModel):
 
     def mkt_shares (self):
         return pd.Series(self._mkt_shares(), index=self.housing_xwalk.index)
-    
+
     def _uneq_mkt_shares (self):
         probs = self._probabilities() * self.weights.loc[self.hh_xwalk.index].values[self.full_hhidx]
         return np.bincount(self.full_uneqchoiceidx, probs)
@@ -862,7 +862,7 @@ Unequilibrated ASCs:
 Second stage (OLS parameters):
 {second_stage_summary}
 
-Fit with EqSorMo version {version}, https://github.com/mattwigway/eqsormo            
+Fit with EqSorMo version {version}, https://github.com/mattwigway/eqsormo
         '''.format(
             first_stage_summary=self.first_stage_fit.summary(),
             unequilibrated_ascs=pd.DataFrame(self.first_stage_uneq_ascs).to_string(),
@@ -888,10 +888,3 @@ Fit with EqSorMo version {version}, https://github.com/mattwigway/eqsormo
         tra = super().from_pickle(fn)
         tra.create_full_alternatives()
         return tra
-
-
-    
-
-
-
-
