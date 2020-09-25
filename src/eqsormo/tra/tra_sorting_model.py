@@ -22,12 +22,10 @@ import statsmodels.api as sm
 import pandas as pd
 import numpy as np
 import scipy.optimize
-import scipy.stats
-import pickle
 import datetime
 
 from . import price_income
-from .clear_market import clear_market
+from .clear_market import clear_market_iter
 from eqsormo.common import BaseSortingModel, MNLFullASC
 from eqsormo.common.util import human_bytes, human_time, human_shape
 from eqsormo.common.compute_ascs import compute_ascs
