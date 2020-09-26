@@ -97,9 +97,9 @@ class TraSortingModel(BaseSortingModel):
 
         :param endogenous_variable_defs: This is a dictionary mapping variable names to functions that calculate them,
             for endogenous variables that need to be updated in the sorting stage of the model, as household re-sort
-            themselves across the region. The function should accept a data frame of housing attributes and numpy
-            array of weights for how likely that household is to live in a particular neighborhood. Should return a
-            float scalar for that neighborhood.
+            themselves across the region. The function should accept a data frame of housing attributes, a series with
+            household income, and a numpy array of weights for how likely that household is to live in a particular
+            neighborhood. Should return a float scalar for that neighborhood.
         :type endogenous_variable_defs: Dict of string -> function
 
         :param neighborhoods: Pandas series of which neighborhood each housing choice is in, for calculation of
@@ -361,7 +361,8 @@ class TraSortingModel(BaseSortingModel):
         # good ol' mononomial logit model
         unequilibrated_choice = self.unequilibrated_choice.copy() if self.unequilibrated_choice is not None else pd.Series(np.zeros(len(self.choice), index=self.choice.index))
         unique_unequilibrated_choices = unequilibrated_choice.unique()
-        self.unequilibrated_choice_xwalk = pd.Series(np.arange(len(unique_unequilibrated_choices)), index=unique_unequilibrated_choices)
+        self.unequilibrated_choice_xwalk = pd.Series(np.arange(len(unique_unequilibrated_choices)),
+                                                     index=unique_unequilibrated_choices)
         self.hh_xwalk = pd.Series(np.arange(len(self.household_attributes)), index=self.household_attributes.index)
 
         self.hh_hsg_choice = self.housing_xwalk.loc[self.choice.loc[self.hh_xwalk.index]].values
@@ -370,8 +371,10 @@ class TraSortingModel(BaseSortingModel):
         if self.endogenous_variable_defs is not None:
             # neighborhood indices
             unique_neighborhoods = self.neighborhoods.unique()
-            self.nbhd_xwalk = pd.Series(np.arange(len(unique_neighborhoods)), index=self.unique_neighborhoods)
-            self.nbhd_for_choice = self.nbhd_xwalk.loc[self.housing_xwalk.index].values # index is sorted
+            self.nbhd_xwalk = pd.Series(np.arange(len(unique_neighborhoods)), index=unique_neighborhoods)
+            # neighborhood for each housing choice, neighborhood index for each neighborhood
+            #assert False, 'I am rather unsure of the next line and want to remember to check it'
+            self.nbhd_for_choice = self.nbhd_xwalk.loc[self.neighborhoods.loc[self.housing_xwalk.index]].values  # index is sorted
 
         # index of each household in the full alternatives dataset
         # repeated for each alternative (housing choice)
@@ -407,7 +410,7 @@ class TraSortingModel(BaseSortingModel):
         # calculate endogenous variables if necessary (conditional is inside the function)
         self.initialize_or_update_endogenous_variables(initial=True)
 
-        if self.sample_alternatives <= 0 or self.sample_alternatives is None:
+        if self.sample_alternatives is None or self.sample_alternatives <= 0:
             if self.max_rent_to_income is None:
                 self.alternatives = self.materialize_alternatives(self.full_hhidx, self.full_choiceidx, self.full_uneqchoiceidx,
                     self.full_hh_hsgidx if self.household_housing_attributes is not None else None)
@@ -767,14 +770,13 @@ class TraSortingModel(BaseSortingModel):
             # to create a copy in the if block below to ensure that the original values were preserved for comparison
             # purposes
             self.endogenous_variables = np.full(
-                (len(self.endogenous_variables),
-                np.max(self.nbhd_for_choice)),
+                (len(self.endogenous_varnames), np.max(self.nbhd_for_choice) + 1),
                 np.nan,
                 'float64'
             )
 
             # compute endogenous variables
-            for neighborhood in range(np.max(self.nbhd_for_choice)):
+            for neighborhood in range(np.max(self.nbhd_for_choice) + 1):
                 nbhdmask = nbhdidx == neighborhood
                 # all probabilities for the neighborhood
                 nbhdweights = weighted_probs[nbhdmask]
@@ -784,7 +786,7 @@ class TraSortingModel(BaseSortingModel):
                 # endogenous_varnames is created by initialize_endogenous_variables
                 for i, varname in enumerate(self.endogenous_varnames):
                     func = self.endogenous_variable_defs[varname]
-                    self.endogenous_variables[neighborhood, i] = func(self.household_attributes, hhweights)
+                    self.endogenous_variables[neighborhood, i] = func(self.household_attributes, self.income, hhweights)
 
             # check our work
             assert not np.any(np.isnan(self.endogenous_variables)), 'some endogenous variables are nan!'
