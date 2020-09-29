@@ -201,10 +201,16 @@ class TraSortingModel(BaseSortingModel):
                 allPassed = False
 
             if hsgattr not in self.housing_attributes.columns:
-                LOG.error(f'Attribute {hsgattr} is used in interactions but is not in housing_attributes')
+                if self.endogenous_variable_defs is None or hsgattr not in self.endogenous_variable_defs:
+                    LOG.error(f'Attribute {hsgattr} is used in interactions but is not in housing_attributes')
+                    allPassed = False
+
+            if hsgattr in self.housing_attributes.columns and self.endogenous_variable_defs is not None\
+                    and hsgattr in self.endogenous_variable_defs:
+                LOG.error(f'{hsgattr} in both housing_attributes and endogenous variables')
                 allPassed = False
 
-            if self.housing_attributes[hsgattr].isnull().any():
+            if hsgattr in self.housing_attributes.columns and self.housing_attributes[hsgattr].isnull().any():
                 LOG.error(f'Attribute {hsgattr} contains NaNs')
                 allPassed = False
 
@@ -307,7 +313,7 @@ class TraSortingModel(BaseSortingModel):
                 endogenous_col = self.endogenous_varnames.index(hsg_attr)
                 alternatives[:, current_col] = (
                     self.household_attributes[hh_attr].astype('float64').values[hhidx]
-                    * self.endogenous_variables[hhidx, endogenous_col]
+                    * self.endogenous_variables[self.nbhd_for_choice[choiceidx], endogenous_col]
                 )
             else:
                 raise KeyError(f'{hsg_attr} is not a housing attribute, exogenous or endogenous')
@@ -373,7 +379,6 @@ class TraSortingModel(BaseSortingModel):
             unique_neighborhoods = self.neighborhoods.unique()
             self.nbhd_xwalk = pd.Series(np.arange(len(unique_neighborhoods)), index=unique_neighborhoods)
             # neighborhood for each housing choice, neighborhood index for each neighborhood
-            #assert False, 'I am rather unsure of the next line and want to remember to check it'
             self.nbhd_for_choice = self.nbhd_xwalk.loc[self.neighborhoods.loc[self.housing_xwalk.index]].values  # index is sorted
 
         # index of each household in the full alternatives dataset
