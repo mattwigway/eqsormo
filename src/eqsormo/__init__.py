@@ -17,14 +17,14 @@ import logging
 from .tra import TraSortingModel
 from . import tra
 
-version = '0.2.3'
+version = '0.3.0'
 
 rootLogger = None
 
 def enable_logging ():
     '''
     Enable logging for the EqSorMo package.
-    
+
     EqSorMo uses the Python logging package. If you are managing loggers at a higher level in a large project, you may not want to run this
     function. Otherwise, running this function will create a root logger and enable logging to the console.
     '''
@@ -38,4 +38,3 @@ def enable_logging ():
         rootLogger.info(f'Eqsormo version {version}')
     else:
         rootLogger.info('Logging already enabled.')
-
