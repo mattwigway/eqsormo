@@ -21,6 +21,7 @@ Functional forms for price and income
 import numpy as np
 import scipy.stats
 
+
 class FunctionalForm(object):
     def __init__ (self, func, name, n_params=0, starting_values=None, param_names=None):
         '''
@@ -70,7 +71,7 @@ sqrtdiff = FunctionalForm(lambda income, price: np.sqrt(income - price), 'sqrt(i
 # NB any price > income should be taken care of by a max_rent_to_income parameter
 # TODO can we remove the max rent to income param here?
 boxcoxdiff = FunctionalForm(lambda income, price, lmbda: scipy.stats.boxcox(np.maximum(income - price, 1), lmbda=lmbda), 'boxcox(income - price)',
-     n_params=1, param_names=['boxcox_lambda'])
+                            n_params=1, param_names=['boxcox_lambda'])
 
 # Form suggested by Stephane Hess in his advanced discrete choice modelling class, London, UK, July 2019
 # Note that this will not behave right if called on a subset of the data, since it uses the mean of income
