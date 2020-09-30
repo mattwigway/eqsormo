@@ -1,9 +1,27 @@
-MODEL_VERSION = 0
+#    Copyright 2020 Matthew Wigginton Conway
+
+#    Licensed under the Apache License, Version 2.0 (the "License");
+#    you may not use this file except in compliance with the License.
+#    You may obtain a copy of the License at
+
+#        http://www.apache.org/licenses/LICENSE-2.0
+
+#    Unless required by applicable law or agreed to in writing, software
+#    distributed under the License is distributed on an "AS IS" BASIS,
+#    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#    See the License for the specific language governing permissions and
+#    limitations under the License.
+
+# Author: Matthew Wigginton Conway <matt@indicatrix.org>
+#         School of Geographical Sciences and Urban Planning,
+#         Arizona State University
 
 import numpy as np
 import dill
 import logging
 import uuid
+
+MODEL_VERSION = 0
 
 LOG = logging.getLogger(__name__)
 
@@ -11,49 +29,56 @@ LOG = logging.getLogger(__name__)
 # everything else. This will hopefully work until we can come up with something better...
 
 FIELDS = [
- 'alternatives_colnames',
- 'alternatives_stds',
- 'choice',
- 'creation_time',
- 'est_first_stage_ses',
- 'first_stage_ascs',
- 'first_stage_fit',
- 'first_stage_uneq_ascs',
- 'full_choiceidx',
- 'full_chosen',
- 'full_hh_hsgidx',
- 'full_hhidx',
- 'full_hsgchosen',
- 'full_uneqchoiceidx',
- 'full_uneqchosen',
- 'hh_hsg_choice',
- 'hh_unequilibrated_choice',
- 'hh_xwalk',
- 'household_attributes',
- 'household_housing_attributes',
- 'housing_attributes',
- 'housing_xwalk',
- 'income',
- 'interactions',
- 'max_chunk_bytes',
- 'max_rent_to_income',
- 'method',
- 'orig_price',
- 'price',
- 'price_income_starting_values',
- 'price_income_transformation',
- 'sample_alternatives',
- 'second_stage_fit',
- 'second_stage_params',
- 'seed',
- 'type_shock',
- 'unequilibrated_choice',
- 'unequilibrated_choice_xwalk',
- 'unequilibrated_hh_params',
- 'unequilibrated_hsg_params',
- 'weighted_supply',
- 'weights'
- ]
+    'alternatives_colnames',
+    'alternatives_stds',
+    'choice',
+    'creation_time',
+    'endogenous_variable_defs',
+    'endogenous_variables',
+    'est_first_stage_ses',
+    'first_stage_ascs',
+    'first_stage_fit',
+    'first_stage_uneq_ascs',
+    'full_choiceidx',
+    'full_chosen',
+    'full_hh_hsgidx',
+    'full_hhidx',
+    'full_hsgchosen',
+    'full_uneqchoiceidx',
+    'full_uneqchosen',
+    'hh_hsg_choice',
+    'hh_unequilibrated_choice',
+    'hh_xwalk',
+    'household_attributes',
+    'household_housing_attributes',
+    'housing_attributes',
+    'housing_xwalk',
+    'income',
+    'interactions',
+    'max_chunk_bytes',
+    'max_rent_to_income',
+    'method',
+    'nbhd_xwalk',
+    'nbhd_for_choice',
+    'neighborhoods',
+    'orig_endogenous_variables',
+    'orig_price',
+    'price',
+    'price_income_starting_values',
+    'price_income_transformation',
+    'sample_alternatives',
+    'second_stage_fit',
+    'second_stage_params',
+    'seed',
+    'type_shock',
+    'unequilibrated_choice',
+    'unequilibrated_choice_xwalk',
+    'unequilibrated_hh_params',
+    'unequilibrated_hsg_params',
+    'weighted_supply',
+    'weights'
+]
+
 
 def save (basefile, model):
     model_uuid = uuid.uuid4().hex
@@ -80,13 +105,14 @@ def save (basefile, model):
     # TODO any way to set allow_pickle=False here?
     np.savez_compressed(f'{basefile}.npz', **numpy_fields)
 
+
 def load (basefile):
     # do here to prevent circular import
     from .tra_sorting_model import TraSortingModel
 
     with open(f'{basefile}.pickle', 'rb') as inp:
         pkl = dill.load(inp)
-    
+
     npz = np.load(f'{basefile}.npz', allow_pickle=False)
 
     if pkl['MODEL_VERSION'] != MODEL_VERSION or npz['MODEL_VERSION'][0] != MODEL_VERSION:

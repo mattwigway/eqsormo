@@ -160,7 +160,7 @@ class TraSortingModel(BaseSortingModel):
         if neighborhoods is not None:
             self.neighborhoods = neighborhoods.reindex(self.housing_attributes.index)
         else:
-            self.neighborhoods
+            self.neighborhoods = None
 
         self.price_income_transformation = price_income_transformation
         self.price_income_starting_values = price_income_starting_values
@@ -380,6 +380,8 @@ class TraSortingModel(BaseSortingModel):
             self.nbhd_xwalk = pd.Series(np.arange(len(unique_neighborhoods)), index=unique_neighborhoods)
             # neighborhood for each housing choice, neighborhood index for each neighborhood
             self.nbhd_for_choice = self.nbhd_xwalk.loc[self.neighborhoods.loc[self.housing_xwalk.index]].values  # index is sorted
+        else:
+            self.nbhd_xwalk = self.nbhd_for_choice = None
 
         # index of each household in the full alternatives dataset
         # repeated for each alternative (housing choice)
