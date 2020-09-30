@@ -59,7 +59,7 @@ class TraSortingModel(BaseSortingModel):
                   unequilibrated_hsg_params, second_stage_params, price, income, choice, unequilibrated_choice,
                   price_income_transformation=price_income.logdiff, price_income_starting_values=[],
                   endogenous_variable_defs: Dict[str, Callable[[Any, Any], float]] = None,
-                  neighborhoods=None, sample_alternatives=None, method='L-BFGS-B',
+                  neighborhoods=None, sample_alternatives=None, method='L-BFGS-B', minimize_options={},
                   max_rent_to_income=None, household_housing_attributes=None, weights=None, max_chunk_bytes=2e9,
                   est_first_stage_ses=True, seed=None):
         '''
@@ -112,8 +112,12 @@ class TraSortingModel(BaseSortingModel):
         :type sample_alternatives: int or None
 
         :param method: A scipy.optimize.minimize method used for maximizing log-likelihood of first stage, default
-            'bfgs'
+            'L-BFGS-B'
         :type method: str
+
+        :param minimize_options: Options for selected minimizer
+        :type minimize_options: dict
+
 
         :param max_rent_to_income: Maximum proportion of income rent can be for the alternative to be included in the
             choice set - in (0, 1] if the price/income transformation can't handle income less than rent
@@ -130,6 +134,8 @@ class TraSortingModel(BaseSortingModel):
         :param est_first_stage_ses: If False, do not estimate standard errors for the first stage. This can
             significantly speed convergence and is recommended during model development.
         :type est_first_stage_ses: bool
+
+
 
         :param seed: seed for the random number generator used in sampling alternatives
         :type seed: int
@@ -165,6 +171,7 @@ class TraSortingModel(BaseSortingModel):
         self.price_income_transformation = price_income_transformation
         self.price_income_starting_values = price_income_starting_values
         self.method = method
+        self.minimize_options = minimize_options
         self.max_rent_to_income = max_rent_to_income
         self.max_chunk_bytes = max_chunk_bytes
         self.est_first_stage_ses = est_first_stage_ses
@@ -413,6 +420,8 @@ class TraSortingModel(BaseSortingModel):
                     hh_hsg_loc.loc[list(zip(self.hh_xwalk.index[self.full_hhidx[chunk_start:chunk_end]],
                     self.housing_xwalk.index[self.full_choiceidx[chunk_start:chunk_end]]))].values
             del hh_hsg_loc # save memory
+        else:
+            self.full_hh_hsgidx = None
 
         # calculate endogenous variables if necessary (conditional is inside the function)
         self.initialize_or_update_endogenous_variables(initial=True)
@@ -474,9 +483,12 @@ class TraSortingModel(BaseSortingModel):
             self.alternatives_hsgchosen = self.full_hsgchosen[sampled_idxs]
             self.alternatives_uneqchosen = self.full_uneqchosen[sampled_idxs]
             self.alternatives_chosen = self.full_chosen[sampled_idxs]
-            self.alternatives_hh_hsgindx = self.full_hh_hsgidx[sampled_idxs]
+            if self.household_housing_attributes is not None:
+                self.alternatives_hh_hsgidx = self.full_hh_hsgidx[sampled_idxs]
+            else:
+                self.alternatives_hh_hsgidx = None
             self.alternatives = self.materialize_alternatives(self.alternatives_hhidx, self.alternatives_choiceidx, self.alternatives_uneqchoiceidx,
-                self.alternatives_hh_hsgindx if self.household_housing_attributes is not None else None)
+                self.alternatives_hh_hsgidx if self.household_housing_attributes is not None else None)
 
         endTime = time.perf_counter()
         LOG.info(f'Created alternatives for {len(self.household_attributes)} households in {endTime - startTime:.3f} seconds')
@@ -583,6 +595,7 @@ class TraSortingModel(BaseSortingModel):
             starting_values=np.concatenate([np.zeros(self.alternatives.shape[1]), self.price_income_transformation.starting_values]),
             param_names=[*self.alternatives_colnames, *self.price_income_transformation.param_names],
             method=self.method,
+            minimize_options=self.minimize_options,
             est_ses=self.est_first_stage_ses
         )
 
