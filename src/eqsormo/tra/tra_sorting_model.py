@@ -777,7 +777,7 @@ class TraSortingModel(BaseSortingModel):
             # to create a copy in the if block below to ensure that the original values were preserved for comparison
             # purposes
             self.endogenous_variables = np.full(
-                (len(self.endogenous_varnames), np.max(self.nbhd_for_choice) + 1),
+                (np.max(self.nbhd_for_choice) + 1, len(self.endogenous_varnames)),
                 np.nan,
                 'float64'
             )
