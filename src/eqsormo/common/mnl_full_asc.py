@@ -15,7 +15,8 @@
 # Author: Matthew Wigginton Conway <matt@indicatrix.org>, School of Geographical Sciences and Urban Planning, Arizona State University
 
 import numpy as np
-import scipy.optimize, scipy.stats
+import scipy.optimize
+import scipy.stats
 import time
 from logging import getLogger
 import pandas as pd
@@ -35,7 +36,7 @@ class MNLFullASC(object):
     This class estimates such multinomial logit models.
     '''
 
-    def __init__ (self, utility, supply, hhidx, choiceidx, chosen, starting_values, method='L-BFGS-B', asc_convergence_criterion=1e-6, param_names=None, est_ses=True, minimize_options={}):
+    def __init__ (self, alternatives, supply, hhidx, choiceidx, chosen, starting_values, method='L-BFGS-B', asc_convergence_criterion=1e-6, param_names=None, est_ses=True, minimize_options={}, add_ln_supply=()):
         '''
         :param utility: Function that returns utility for all choice alternatives and decisionmakers for a given set of parameters, not including ASCs. Receives parameters as a numpy array. Should return a MultiIndexed-pandas dataframe with indices called 'decisionmaker' and 'choice'
         :type utility: function
@@ -53,8 +54,11 @@ class MNLFullASC(object):
 
         :param minimize_options: dict of additional options for selected minimization method
         :type minimize_options: dict
+
+        :param add_ln_supply: margins (parallel to supply) that should have log of supply added to utility
+        :type add_ln_supply: tuple
         '''
-        self.utility = utility # TODO will this always be called with self as first argument?
+        self.alternatives = alternatives  # TODO will this always be called with self as first argument?
         self.supply = supply
         self.starting_values = starting_values
         self.method = method
@@ -67,6 +71,16 @@ class MNLFullASC(object):
         self.chosen = chosen
         self.est_ses = est_ses
         self.minimize_options = minimize_options
+        self.add_ln_supply = add_ln_supply
+
+        # precompute the ln(supply) values to be added to utility
+        self._log_supply = np.zeros_like(choiceidx[0], dtype='float64')
+        for dim in add_ln_supply:
+            self._log_supply += np.log(supply[dim][choiceidx[dim]])
+
+    def base_utility (self, params):
+        'Utility without ASCs'
+        return np.dot(self.alternatives, params).reshape(-1) + self._log_supply
 
     def compute_ascs (self, base_utilities):
         '''
@@ -87,7 +101,7 @@ class MNLFullASC(object):
 
     def full_utility (self, params):
         'Full utilities including ASCs'
-        base_utilities = self.utility(params)
+        base_utilities = self.base_utility(params)
         #LOG.info(f'Computed base utilities in {human_time(end_time - start_time)}')
         ascs = self.compute_ascs(base_utilities)
         full_utilities = base_utilities
@@ -96,24 +110,26 @@ class MNLFullASC(object):
             full_utilities += ascs[margin][self.choiceidx[margin]]
         return full_utilities
 
-    def probabilities (self, params):
-        utility = self.full_utility(params)
+    def probabilities (self, utility):
         exp_utility = np.exp(utility)
         if not np.all(np.isfinite(exp_utility)):
             raise ValueError('Household/choice combinations ' + str(exp_utility.index[~np.isfinite(exp_utility)]) + ' have non-finite utilities!')
         logsums = np.bincount(self.hhidx, weights=exp_utility)
         return exp_utility / logsums[self.hhidx]
 
-    def choice_probabilities (self, params):
-        probabilities = self.probabilities(params)
+    def choice_probabilities (self, utility):
+        probabilities = self.probabilities(utility)
         return probabilities[self.chosen]
 
-    def negative_log_likelihood (self, params):
-        negll = -np.sum(np.log(self.choice_probabilities(params)))
+    def negative_log_likelihood_for_utility (self, utility):
+        negll = -np.sum(np.log(self.choice_probabilities(utility)))
         if np.isnan(negll) or not np.isfinite(negll):
-            LOG.warn('log-likelihood nan or not finite, for params:\n' + str(params)) # just warn, solver may be able to get out of this
+            LOG.warn('log-likelihood nan or not finite') # just warn, solver may be able to get out of this
         #LOG.info(f'Current negative log likelihood: {negll:.2f}')
         return negll
+
+    def negative_log_likelihood (self, params):
+        return self.negative_log_likelihood_for_utility(self.full_utility(params))
 
     # some optimizers call with a second state arg, some do not. be lenient.
     def log_progress (self, params, state=None):
@@ -152,9 +168,12 @@ class MNLFullASC(object):
 
         if self.est_ses:
             if minResults.success:
-                LOG.info('calculating and inverting Hessian')
+                LOG.info('calculating Hessian')
                 # TODO robust SEs
-                hess = statsmodels.tools.numdiff.approx_hess3(minResults.x, self.negative_log_likelihood)
+                # hess = statsmodels.tools.numdiff.approx_hess3(minResults.x, self.negative_log_likelihood)
+                # hess = approx_hess3(minResults.x, self.negative_log_likelihood)
+                hess = self.linear_hessian(minResults.x)
+                LOG.info('inverting Hessian')
                 hessInv = np.linalg.inv(hess)
                 ses = np.sqrt(np.diag(hessInv))
                 LOG.info('done calculating and inverting Hessian')
@@ -179,7 +198,7 @@ class MNLFullASC(object):
             # two-tailed test
             self.pvalues = 2 * scipy.stats.norm.cdf(-np.abs(self.zvalues))
 
-        self.ascs = self.compute_ascs(self.utility(minResults.x))
+        self.ascs = self.compute_ascs(self.base_utility(minResults.x))
         self.converged = minResults.success
 
         endTime = time.perf_counter()
@@ -188,6 +207,49 @@ class MNLFullASC(object):
         else:
             LOG.error(f'Multinomial logit model FAILED TO CONVERGE in {human_time(endTime - startTime)}: {minResults.message}')
         LOG.info(f'  Finding ASCs took {human_time(self.asc_time)}')
+
+    def linear_hessian (self, params, step_size=None):
+        '''
+        Compute the Hessian, quickly. This takes advantage of the fact that many components of utility are constant
+        when computing the Hessian, which changes two parameters at a time. The ASCs also do not really need to be
+        recomputed, as the changes to the coefficients are miniscule. This only works for utility functions that are
+        strictly linear-in-parameters, which the MNL utility function is.
+
+        The results of this function should be identical to statsmodels.tools.numdiff.approx_hess3, as the algorithm
+        used is the same (equation 9 from Ridout 2009 - note that Ridout 2009 is about complex step differentiation, but
+        eq. 9 is an example of finite-step differentiation).
+
+        Ridout, M. S. (2009). Statistical Applications of the Complex-Step Method of Numerical Differentiation.
+            _The American Statistician_, 63(1), 66–74. https://doi.org/10.1198/tast.2009.0013
+        '''
+        utility = self.full_utility(params)
+
+        # this is the step size for the finite-difference approximation. it is copied from
+        # statsmodels.tools.numdiff.approx_hess3
+        if step_size is None:
+            step_size = np.MachAr().eps ** (1. / 4) * np.maximum(np.abs(params), 0.1)
+        elif isinstance(step_size, float):
+            step_size = np.full(len(params), step_size)
+
+        LOG.info('computing Hessian')
+        # we need the outer product to scale the finite diff appx below
+        prod = np.outer(step_size, step_size)
+        hess = np.zeros_like(prod)
+
+        n = len(params)
+        for i in range(n):
+            step_i = self.alternatives[:, i] * step_size[i]
+            LOG.info(f'Hessian starting row {i} / {n}')
+            for j in range(i, n):
+                step_j = self.alternatives[:, j] * step_size[j]
+                hess[i, j] = hess[j, i] = (
+                    self.negative_log_likelihood_for_utility(utility + step_i + step_j)
+                    - self.negative_log_likelihood_for_utility(utility + step_i - step_j)
+                    - (self.negative_log_likelihood_for_utility(utility - step_i + step_j)
+                       - self.negative_log_likelihood_for_utility(utility - step_i - step_j))
+                ) / (4 * prod[i, j])
+
+        return hess
 
     def summary (self):
         with pd.option_context('display.max_rows', None):

@@ -78,7 +78,7 @@ def compute_ascs (base_utilities, supply, hhidx, choiceidx, starting_values=None
             # print(np.max(exp_utils))
             return [np.array([42.0])] # will cause errors somewhere else, so the process will crash, and hopefully the user
             # will find the output of the above print statement while debugging.
-        
+
         logsums = np.bincount(hhidx, weights=exp_utils)
         first_stage_probs = exp_utils / logsums[hhidx]
 
@@ -98,7 +98,7 @@ def compute_ascs (base_utilities, supply, hhidx, choiceidx, starting_values=None
                 print('Total demand does not equal total supply! This may be a scaling issue.')
                 return [np.array([42.0])] # will cause errors somewhere else, so the process will crash, and hopefully the user
                 # will find the output of the above print statement while debugging.
-                
+
             if np.max(np.abs(margin_shares - supply[margin])) >= convergence_criterion:
                 converged = False
 
@@ -115,5 +115,3 @@ def compute_ascs (base_utilities, supply, hhidx, choiceidx, starting_values=None
                 ascs[margin] -= ascs[margin][0]
 
     return ascs
-
-    
