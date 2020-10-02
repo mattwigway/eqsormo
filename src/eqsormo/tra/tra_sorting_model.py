@@ -623,7 +623,7 @@ class TraSortingModel(BaseSortingModel):
         scalars.loc[self.price_income_transformation.param_names] = 1
         scalars = scalars.reindex(self.first_stage_fit.params.index)
         self.first_stage_fit.params /= scalars
-        if self.est_first_stage_ses:
+        if self.est_first_stage_ses and self.first_stage_fit.se is not None:
             self.first_stage_fit.se /= scalars
 
         # no scaling needed anymore

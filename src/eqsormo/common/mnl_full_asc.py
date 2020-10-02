@@ -168,17 +168,22 @@ class MNLFullASC(object):
 
         if self.est_ses:
             if minResults.success:
-                LOG.info('calculating Hessian')
-                # TODO robust SEs
-                # hess = statsmodels.tools.numdiff.approx_hess3(minResults.x, self.negative_log_likelihood)
-                # hess = approx_hess3(minResults.x, self.negative_log_likelihood)
-                hess = self.linear_hessian(minResults.x)
-                LOG.info('inverting Hessian')
-                hessInv = np.linalg.inv(hess)
-                ses = np.sqrt(np.diag(hessInv))
-                LOG.info('done calculating and inverting Hessian')
+                try:
+                    LOG.info('calculating Hessian')
+                    # TODO robust SEs
+                    # hess = statsmodels.tools.numdiff.approx_hess3(minResults.x, self.negative_log_likelihood)
+                    # hess = approx_hess3(minResults.x, self.negative_log_likelihood)
+                    hess = self.linear_hessian(minResults.x)
+                    LOG.info('inverting Hessian')
+                    hessInv = np.linalg.inv(hess)
+                    ses = np.sqrt(np.diag(hessInv))
+                    LOG.info('done calculating and inverting Hessian')
+                except KeyboardInterrupt:
+                    self.est_ses = False
+                    LOG.warn('Keyboard interrupt caught, not calculating standard errors')
             else:
                 LOG.error('Not calculating Hessian because model did not converge')
+                self.est_ses = False
         else:
             LOG.info('Not calculating Hessian because standard errors were not requested')
 
@@ -187,10 +192,14 @@ class MNLFullASC(object):
             self.params = minResults.x
             if self.est_ses:
                 self.se = ses
+            else:
+                self.se = None
         else:
             self.params = pd.Series(minResults.x, index=self.param_names)
             if self.est_ses:
                 self.se = pd.Series(ses, index=self.param_names)
+            else:
+                self.se = None
 
         # TODO compute t-stats
         if self.est_ses:
