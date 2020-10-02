@@ -24,7 +24,6 @@ import statsmodels.tools.numdiff
 
 from .compute_ascs import compute_ascs
 from .util import human_time
-from .fast_hessian import approx_hess3
 
 LOG = getLogger(__name__)
 
