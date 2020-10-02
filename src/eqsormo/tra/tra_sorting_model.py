@@ -183,6 +183,9 @@ class TraSortingModel(BaseSortingModel):
 
         self.creation_time = datetime.datetime.today()
 
+        assert price_income_transformation.n_params == 0,\
+            'Parameterized price_income_transformations not currently supported'
+
     def validate (self):
         # TODO this could easily be moved to a new file
         allPassed = True
@@ -495,34 +498,6 @@ class TraSortingModel(BaseSortingModel):
         LOG.info(f'Alternatives dimensions: {human_shape(self.alternatives.shape)}')
         LOG.info(f'Alternatives use {human_bytes(self.alternatives.nbytes)} memory')
 
-    def first_stage_utility (self, params):
-        if self.price_income_transformation.n_params > 0:
-            coefs = params[:-self.price_income_transformation.n_params]
-            transformation_params = params[-self.price_income_transformation.n_params:]
-        else:
-            coefs = params
-            transformation_params = []
-
-        if not np.all(np.isfinite(self.alternatives[0,:])):
-            raise ValueError('not all budgets are finite')
-
-        if len(transformation_params) > 0:
-            # recalc budgets if they are dependent on an estimated parameter
-            self.alternatives[0,:] = self.price_income_transformation.apply(
-                self.income.astype('float64').values[self.alternatives_hhidx],
-                self.price.astype('float64').values[self.alternatives_choiceidx],
-                *transformation_params)
-
-        # compute utilities
-        utils = np.dot(self.alternatives, coefs).reshape(-1)
-
-        # add log of supply, which is the part of the ASC which reacts to changing market shares
-        # unequilibrated alternatives do not
-        # TODO could move this calculation into MNLFullASC
-        utils += self._log_supply
-
-        return utils
-
     def chunked_full_alternatives (self, price_income_params):
         '''
         With large sorting models it is not possible to materialize the entire dataset all at once, as we will quickly run out of memory.
@@ -584,7 +559,7 @@ class TraSortingModel(BaseSortingModel):
         self._log_supply = np.log(np.bincount(self.hh_hsg_choice))[self.alternatives_choiceidx]
 
         self.first_stage_fit = MNLFullASC(
-            utility=self.first_stage_utility,
+            alternatives=self.alternatives,
             choiceidx=(self.alternatives_choiceidx, self.alternatives_uneqchoiceidx),
             hhidx=self.alternatives_hhidx,
             chosen=self.alternatives_chosen,
@@ -592,7 +567,7 @@ class TraSortingModel(BaseSortingModel):
                 np.bincount(self.hh_hsg_choice),
                 np.bincount(self.hh_unequilibrated_choice)
             ),
-            starting_values=np.concatenate([np.zeros(self.alternatives.shape[1]), self.price_income_transformation.starting_values]),
+            starting_values=np.zeros(self.alternatives.shape[1], dtype='float64'),
             param_names=[*self.alternatives_colnames, *self.price_income_transformation.param_names],
             method=self.method,
             minimize_options=self.minimize_options,
