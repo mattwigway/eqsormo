@@ -15,10 +15,15 @@
 # Author: Matthew Wigginton Conway <matt@indicatrix.org>, School of Geographical Sciences and Urban Planning, Arizona State University
 
 import numpy as np
+from logging import getLogger
+
+LOG = getLogger(__name__)
 
 
 #@numba.jit(nopython=True)
-def compute_ascs (base_utilities, supply, hhidx, choiceidx, starting_values=None, convergence_criterion=1e-6, weights=None):
+# TODO convergence_criterion doesn't do anything
+def compute_ascs (base_utilities, supply, hhidx, choiceidx, starting_values=None, convergence_criterion=1e-6,
+                  weights=None, log=False):
     '''
     Compute the alternative specific constants (ASCs) that should be added to base_utilities to make the market shares equal supply.
 
@@ -109,9 +114,10 @@ def compute_ascs (base_utilities, supply, hhidx, choiceidx, starting_values=None
                 return [np.array([42.0])] # will cause errors somewhere else, so the process will crash, and hopefully the user
                 # will find the output of the above print statement while debugging.
 
-            if np.max(np.abs(margin_shares - supply[margin])) >= convergence_criterion:
+            if not np.allclose(margin_shares, supply[margin]):
                 converged = False
-                print(f'Margin {margin}: maxdiff: {np.max(margin_shares - supply[margin])}, mindiff: {np.min(margin_shares - supply[margin])} {len(ascs[margin])} ascs')
+                if log:
+                    LOG.info(f'Margin {margin}: maxdiff: {np.max(margin_shares - supply[margin])}, mindiff: {np.min(margin_shares - supply[margin])} {len(ascs[margin])} ascs')
 
         if converged:
             break

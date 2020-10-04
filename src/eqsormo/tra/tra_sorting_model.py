@@ -611,7 +611,8 @@ class TraSortingModel(BaseSortingModel):
                 self.full_uneqchoiceidx[feasible_alts]
             ),
             starting_values=self.first_stage_fit.ascs,
-            weights=self.weights.loc[self.hh_xwalk.index].values
+            weights=self.weights.loc[self.hh_xwalk.index].values,
+            log=True
         )
         fullAscEndTime = time.perf_counter()
 
