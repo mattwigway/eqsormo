@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='eqsormo',
-    version='0.3.5',
+    version='0.3.6',
     packages=find_packages('src'),
     package_dir={'': 'src'},
     requirements=['statsmodels>=0.11', 'tqdm>=4.0', 'numba>=0.51', 'numpy>=1.0', 'pandas>=1.0', 'dill>=0.3', 'scipy>=1.5'],
