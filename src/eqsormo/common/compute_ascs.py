@@ -15,7 +15,7 @@
 # Author: Matthew Wigginton Conway <matt@indicatrix.org>, School of Geographical Sciences and Urban Planning, Arizona State University
 
 import numpy as np
-import numba
+
 
 #@numba.jit(nopython=True)
 def compute_ascs (base_utilities, supply, hhidx, choiceidx, starting_values=None, convergence_criterion=1e-6, weights=None):
@@ -53,13 +53,20 @@ def compute_ascs (base_utilities, supply, hhidx, choiceidx, starting_values=None
     else:
         ascs = starting_values
 
+    # this variable is unhelpfully named to increase efficiency, so that we do not have to allocate as many (potentially
+    # large) arrays. at various points in the algorithm it contains utilities, then exponentiated utilities, then
+    # probabilities
+    values = np.copy(base_utilities)
     while True:
-        first_stage_utilities = base_utilities
+        values[:] = base_utilities
+        # values now contains base utilities
         for margin in range(len(ascs)):
-            first_stage_utilities = first_stage_utilities + ascs[margin][choiceidx[margin]]
+            np.add(values, ascs[margin][choiceidx[margin]], out=values)
+        # values now contains full utilities with ASCs
 
-        exp_utils = np.exp(first_stage_utilities)
-        if np.any(~np.isfinite(exp_utils)):
+        np.exp(values, out=values)
+        # values now contains exponentiated utilities
+        if np.any(~np.isfinite(values)):
             # TODO should raise ValueError, but that breaks numba
             print('Some exponentiated utilities are non-finite! This may be a scaling issue.')
             # print('Max ASC:')
@@ -79,18 +86,21 @@ def compute_ascs (base_utilities, supply, hhidx, choiceidx, starting_values=None
             return [np.array([42.0])] # will cause errors somewhere else, so the process will crash, and hopefully the user
             # will find the output of the above print statement while debugging.
 
-        logsums = np.bincount(hhidx, weights=exp_utils)
-        first_stage_probs = exp_utils / logsums[hhidx]
+        logsums = np.bincount(hhidx, weights=values)
+        np.divide(values, logsums[hhidx], out=values)
+        # values now contains probabilities
 
         if weights is not None:
-            first_stage_probs *= weights[hhidx] # multiply each prob by the weight of the household it represents
+            # multiply each prob by the weight of the household it represents
+            np.multiply(values, weights[hhidx], out=values)
+        # values now contains weighted probabilities
 
         converged = True
         first_stage_shares = []
 
         # check convergence on all dimensions
         for margin in range(len(ascs)):
-            margin_shares = np.bincount(choiceidx[margin], weights=first_stage_probs)
+            margin_shares = np.bincount(choiceidx[margin], weights=values)
             first_stage_shares.append(margin_shares)
 
             if np.abs(np.sum(margin_shares) - np.sum(supply[margin])) > 1e-3:
@@ -101,6 +111,7 @@ def compute_ascs (base_utilities, supply, hhidx, choiceidx, starting_values=None
 
             if np.max(np.abs(margin_shares - supply[margin])) >= convergence_criterion:
                 converged = False
+                print(f'Margin {margin}: maxdiff: {np.max(margin_shares - supply[margin])}, mindiff: {np.min(margin_shares - supply[margin])} {len(ascs[margin])} ascs')
 
         if converged:
             break
