@@ -634,6 +634,10 @@ class TraSortingModel(BaseSortingModel):
         self.first_stage_uneq_ascs = pd.Series(ascs[1], index=self.unequilibrated_choice_xwalk.index)
         LOG.info(f'Finding full ASCs took {human_time(fullAscEndTime - fullAscStartTime)}')
 
+        # don't serialize
+        self.first_stage_fit.alternatives = None
+        self.first_stage_fit._log_supply = None
+
     def fit_second_stage (self):
         LOG.info('fitting second stage')
         startTime = time.perf_counter()
