@@ -70,12 +70,13 @@ def clear_market_iter (non_price_utilities, hhidx, choiceidx, supply, income, st
     if np.any(shares == 0):
         raise ValueError('Some shares are zero.')
 
+    if np.allclose(shares, supply):
+        return price, False
+
     excess_demand = shares - supply
 
     # maxdiff = np.max(np.abs(shares - supply) / supply)
     maxdiff = np.max(np.abs(excess_demand / supply))
-    if maxdiff < convergence_criterion:
-        return price, False
 
     # probably will need to remove if using numba
     maxpricediff = np.max(price - prev_price)
@@ -136,7 +137,7 @@ def clear_market_iter (non_price_utilities, hhidx, choiceidx, supply, income, st
     price = price - (excess_demand / deriv)
     LOG.info(f'Max unit diff: {maxdiff}, max price diff: {maxpricediff}, '
              + f'min price diff: {minpricediff}, additional excluded due to rent/income ration {deltaNExcluded}')
-    
+
     return price, False  # not converged yet (or we don't know anyhow)
 
 
