@@ -721,7 +721,6 @@ class TraSortingModel(BaseSortingModel):
                 price_income_params=price_income_params,
                 budget_coef=self.first_stage_fit.params['budget'],
                 max_rent_to_income=self.max_rent_to_income,
-                maxiter=maxiter,
                 weights=self.weights.loc[self.hh_xwalk.index].values if self.weights is not None else None
             )
 
