@@ -693,6 +693,7 @@ class TraSortingModel(BaseSortingModel):
             price_income_params = np.zeros(0)
 
         itr = 0
+        startTimeClear = time.perf_counter()
         while True:
             if itr > maxiter:
                 LOG.error(f'Prices FAILED TO CONVERGE after {itr} iterations')
@@ -709,8 +710,7 @@ class TraSortingModel(BaseSortingModel):
             # might change in the sorting phase. The filtering happens there. This does not matter for the calculation of utility below, since utilities for
             # different alternatives are independent of each other and the budget is set to zero anyhow.
 
-            startTimeClear = time.perf_counter()
-            new_prices = clear_market_iter(
+            new_prices, converged = clear_market_iter(
                 non_price_utilities=non_price_utilities,
                 hhidx=self.full_hhidx,
                 choiceidx=self.full_choiceidx,
@@ -724,15 +724,16 @@ class TraSortingModel(BaseSortingModel):
                 maxiter=maxiter,
                 weights=self.weights.loc[self.hh_xwalk.index].values if self.weights is not None else None
             )
-            endTimeClear = time.perf_counter()
 
             new_prices = pd.Series(new_prices, index=self.housing_xwalk.index)
-
-            maxPriceChange = np.max(np.abs(new_prices - self.price))
-
-            LOG.info(f'Market cleared in {human_time(endTimeClear - startTimeClear)}, with price changes up to {maxPriceChange:.4f}')
-
             self.price = new_prices
+
+            if converged:
+                LOG.info(f'prices converged after {itr} iterations')
+                break
+
+        endTimeClear = time.perf_counter()
+        LOG.info(f'sorting took {human_time(endTimeClear - startTimeClear)}')
 
     def initialize_or_update_endogenous_variables (self, initial: bool) -> None:
         '''
