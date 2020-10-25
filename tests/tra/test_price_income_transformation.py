@@ -22,28 +22,50 @@ import pandas as pd
 income = np.array([100, 150, 30, 20, 70])
 price = np.array([8, 12, 14, 9, 10])
 
-def test_logdiff ():
-    assert np.allclose(price_income.logdiff.apply(income, price), np.log(income - price))
 
-def test_sqrtdiff ():
-    assert np.allclose(price_income.sqrtdiff.apply(income, price), np.sqrt(income - price))
+def test_logdiff():
+    assert np.allclose(
+        price_income.logdiff.apply(income, price), np.log(income - price)
+    )
 
-def test_normdiff ():
-    assert np.allclose(price_income.normdiff.apply(income, price, 200), scipy.stats.norm.cdf(income - price, scale=200))
-    assert np.allclose(price_income.normdiff.apply(income, price, 300), scipy.stats.norm.cdf(income - price, scale=300))
+
+def test_sqrtdiff():
+    assert np.allclose(
+        price_income.sqrtdiff.apply(income, price), np.sqrt(income - price)
+    )
+
+
+def test_normdiff():
+    assert np.allclose(
+        price_income.normdiff.apply(income, price, 200),
+        scipy.stats.norm.cdf(income - price, scale=200),
+    )
+    assert np.allclose(
+        price_income.normdiff.apply(income, price, 300),
+        scipy.stats.norm.cdf(income - price, scale=300),
+    )
     # make sure the scale param has an effect
-    assert not np.allclose(price_income.normdiff.apply(income, price, 300), price_income.normdiff.apply(income, price, 200))
+    assert not np.allclose(
+        price_income.normdiff.apply(income, price, 300),
+        price_income.normdiff.apply(income, price, 200),
+    )
     # make sure it works with price > income - this transformation can handle this, unlike the other transformations
     bigprice = np.array([8, 12, 14, 30, 10])
     assert np.any(bigprice > income)
     assert not pd.isnull(price_income.normdiff.apply(income, bigprice, 200)).any()
 
-def test_boxcox ():
-    assert np.allclose(price_income.boxcoxdiff.apply(income, price, 1), scipy.stats.boxcox(income - price, lmbda=1))
-    assert np.allclose(price_income.boxcoxdiff.apply(income, price, 3), scipy.stats.boxcox(income - price, lmbda=3))
-    assert not np.allclose(price_income.boxcoxdiff.apply(income, price, 1), price_income.boxcoxdiff.apply(income, price, 3))
+
+def test_boxcox():
+    assert np.allclose(
+        price_income.boxcoxdiff.apply(income, price, 1),
+        scipy.stats.boxcox(income - price, lmbda=1),
+    )
+    assert np.allclose(
+        price_income.boxcoxdiff.apply(income, price, 3),
+        scipy.stats.boxcox(income - price, lmbda=3),
+    )
+    assert not np.allclose(
+        price_income.boxcoxdiff.apply(income, price, 1),
+        price_income.boxcoxdiff.apply(income, price, 3),
+    )
     # TODO test behavior when price >= income
-
-
-
-

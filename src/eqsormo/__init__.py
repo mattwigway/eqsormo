@@ -13,21 +13,23 @@
 #    limitations under the License.
 
 import logging
-#from .sorting_model import SortingModel
+
+# from .sorting_model import SortingModel
 from .tra import TraSortingModel
 from . import tra
 
-version = '0.3.10'
+version = "0.3.10"
 
 rootLogger = None
 
-def enable_logging ():
-    '''
+
+def enable_logging():
+    """
     Enable logging for the EqSorMo package.
 
     EqSorMo uses the Python logging package. If you are managing loggers at a higher level in a large project, you may not want to run this
     function. Otherwise, running this function will create a root logger and enable logging to the console.
-    '''
+    """
     global rootLogger
 
     if rootLogger is None:
@@ -35,6 +37,6 @@ def enable_logging ():
         rootLogger.setLevel(logging.INFO)
         rootLogger.addHandler(logging.StreamHandler())
 
-        rootLogger.info(f'Eqsormo version {version}')
+        rootLogger.info(f"Eqsormo version {version}")
     else:
-        rootLogger.info('Logging already enabled.')
+        rootLogger.info("Logging already enabled.")

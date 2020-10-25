@@ -20,11 +20,19 @@ from logging import getLogger
 LOG = getLogger(__name__)
 
 
-#@numba.jit(nopython=True)
+# @numba.jit(nopython=True)
 # TODO convergence_criterion doesn't do anything
-def compute_ascs (base_utilities, supply, hhidx, choiceidx, starting_values=None, convergence_criterion=1e-6,
-                  weights=None, log=False):
-    '''
+def compute_ascs(
+    base_utilities,
+    supply,
+    hhidx,
+    choiceidx,
+    starting_values=None,
+    convergence_criterion=1e-6,
+    weights=None,
+    log=False,
+):
+    """
     Compute the alternative specific constants (ASCs) that should be added to base_utilities to make the market shares equal supply.
 
     This allows multinomial logit models with a full set of ASCs to converge a lot faster. For models with full sets of ASCs,
@@ -51,7 +59,7 @@ def compute_ascs (base_utilities, supply, hhidx, choiceidx, starting_values=None
 
     :param weights: household weights, indexed by hhidx (NOTE THAT SUPPLY SHOULD BE WEIGHTED AS WELL WHEN USING WEIGHTS)
     :type weights: numpy.ndarray
-    '''
+    """
 
     if starting_values is None:
         ascs = [np.zeros(chcidx.max() + 1) for chcidx in choiceidx]
@@ -73,7 +81,9 @@ def compute_ascs (base_utilities, supply, hhidx, choiceidx, starting_values=None
         # values now contains exponentiated utilities
         if np.any(~np.isfinite(values)):
             # TODO should raise ValueError, but that breaks numba
-            print('Some exponentiated utilities are non-finite! This may be a scaling issue.')
+            print(
+                "Some exponentiated utilities are non-finite! This may be a scaling issue."
+            )
             # print('Max ASC:')
             # print(np.max(ascs))
             # print('Min ASC')
@@ -88,7 +98,9 @@ def compute_ascs (base_utilities, supply, hhidx, choiceidx, starting_values=None
             # print(np.min(exp_utils))
             # print('Max exp(utility)')
             # print(np.max(exp_utils))
-            return [np.array([42.0])] # will cause errors somewhere else, so the process will crash, and hopefully the user
+            return [
+                np.array([42.0])
+            ]  # will cause errors somewhere else, so the process will crash, and hopefully the user
             # will find the output of the above print statement while debugging.
 
         logsums = np.bincount(hhidx, weights=values)
@@ -110,14 +122,20 @@ def compute_ascs (base_utilities, supply, hhidx, choiceidx, starting_values=None
 
             if np.abs(np.sum(margin_shares) - np.sum(supply[margin])) > 1e-3:
                 # TODO should raise ValueError, but that breaks numba
-                print('Total demand does not equal total supply! This may be a scaling issue.')
-                return [np.array([42.0])] # will cause errors somewhere else, so the process will crash, and hopefully the user
+                print(
+                    "Total demand does not equal total supply! This may be a scaling issue."
+                )
+                return [
+                    np.array([42.0])
+                ]  # will cause errors somewhere else, so the process will crash, and hopefully the user
                 # will find the output of the above print statement while debugging.
 
             if not np.allclose(margin_shares, supply[margin]):
                 converged = False
                 if log:
-                    LOG.info(f'Margin {margin}: maxdiff: {np.max(margin_shares - supply[margin])}, mindiff: {np.min(margin_shares - supply[margin])} {len(ascs[margin])} ascs')
+                    LOG.info(
+                        f"Margin {margin}: maxdiff: {np.max(margin_shares - supply[margin])}, mindiff: {np.min(margin_shares - supply[margin])} {len(ascs[margin])} ascs"
+                    )
 
         if converged:
             break
@@ -125,7 +143,9 @@ def compute_ascs (base_utilities, supply, hhidx, choiceidx, starting_values=None
             # update ASCs
             # this is not done in the above for loop because once the model has converged we don't want to update any more ASCs
             for margin in range(len(ascs)):
-                ascs[margin] = ascs[margin] - np.log(first_stage_shares[margin] / supply[margin])
+                ascs[margin] = ascs[margin] - np.log(
+                    first_stage_shares[margin] / supply[margin]
+                )
 
                 # normalize, can add/subtract constant to utility and not change predictions
                 # this is true even in the multidimensional case, because _every_ outcome changes simultaneously

@@ -19,14 +19,26 @@
 import numpy as np
 
 from logging import getLogger
+
 LOG = getLogger(__name__)
 
 
-def clear_market_iter (non_price_utilities, hhidx, choiceidx, supply, income, starting_price,
-                       price_income_transformation, price_income_params, budget_coef,
-                       max_rent_to_income=None, convergence_criterion=1e-4, step=1e-2,
-                       weights=None):
-    '''
+def clear_market_iter(
+    non_price_utilities,
+    hhidx,
+    choiceidx,
+    supply,
+    income,
+    starting_price,
+    price_income_transformation,
+    price_income_params,
+    budget_coef,
+    max_rent_to_income=None,
+    convergence_criterion=1e-4,
+    step=1e-2,
+    weights=None,
+):
+    """
     Run one iteration of the market-clearing algorithm.
 
     income and price should be by household index/choice index, respectively.
@@ -34,7 +46,7 @@ def clear_market_iter (non_price_utilities, hhidx, choiceidx, supply, income, st
     returns price after next iteration, and flag for whether prices have converged. Note that once
     prices converge, one more call is necessary to confirm convergence, to avoid additional computation
     of market shares to check convergence after prices are updated.
-    '''
+    """
     price = starting_price
 
     alt_income = income[hhidx]
@@ -49,9 +61,13 @@ def clear_market_iter (non_price_utilities, hhidx, choiceidx, supply, income, st
         # Also, this will affect sorting equilibrium, because the price may effectively get fixed to the
         # 90th percentile income because it always moves off, and everything else equilibrate around it
         if np.any(price > np.max(income) * max_rent_to_income):
-            LOG.error('Some prices have exceeded max income - setting to be affordable to 90th'
-                        + 'percentile household to keep process going.')
-            price[price > np.max(income) * max_rent_to_income] = np.percentile(income, 0.9) * max_rent_to_income
+            LOG.error(
+                "Some prices have exceeded max income - setting to be affordable to 90th"
+                + "percentile household to keep process going."
+            )
+            price[price > np.max(income) * max_rent_to_income] = (
+                np.percentile(income, 0.9) * max_rent_to_income
+            )
 
     shares = compute_shares(
         price=price,
@@ -64,11 +80,11 @@ def clear_market_iter (non_price_utilities, hhidx, choiceidx, supply, income, st
         price_income_params=price_income_params,
         budget_coef=budget_coef,
         max_rent_to_income=max_rent_to_income,
-        weights=weights
+        weights=weights,
     )
 
     if np.any(shares == 0):
-        raise ValueError('Some shares are zero.')
+        raise ValueError("Some shares are zero.")
 
     if np.allclose(shares, supply):
         return price, False
@@ -83,9 +99,11 @@ def clear_market_iter (non_price_utilities, hhidx, choiceidx, supply, income, st
     minpricediff = np.min(price - prev_price)
     prev_price[:] = price
     if max_rent_to_income is not None:
-        deltaNExcluded = np.sum(alt_income * max_rent_to_income <= price[choiceidx]) - origNExcluded
+        deltaNExcluded = (
+            np.sum(alt_income * max_rent_to_income <= price[choiceidx]) - origNExcluded
+        )
     else:
-        deltaNExcluded = 'n/a'
+        deltaNExcluded = "n/a"
 
     # Use the approach defined in Tra (2007), page 108, eq. 7.7/7.7a, which is copied from Anas (1982)
     # first, compute derivative. Since the budget transformation is an arbitrary Python function,
@@ -103,8 +121,9 @@ def clear_market_iter (non_price_utilities, hhidx, choiceidx, supply, income, st
         feasible_alts = alt_income * max_rent_to_income > alt_price
 
     budget = np.full_like(alt_income, np.nan)
-    budget[feasible_alts] =\
-        price_income_transformation.apply(alt_income[feasible_alts], alt_price[feasible_alts], *price_income_params)
+    budget[feasible_alts] = price_income_transformation.apply(
+        alt_income[feasible_alts], alt_price[feasible_alts], *price_income_params
+    )
     price_step = 1e-8
     budget_step = np.full_like(alt_income, np.nan)
 
@@ -112,9 +131,11 @@ def clear_market_iter (non_price_utilities, hhidx, choiceidx, supply, income, st
         feasible_alts_step = np.full_like(alt_price, True)
     else:
         feasible_alts_step = alt_income * max_rent_to_income > alt_price
-    budget_step[feasible_alts] =\
-        price_income_transformation.apply(alt_income[feasible_alts_step],
-                                          alt_price[feasible_alts_step] + price_step, *price_income_params)
+    budget_step[feasible_alts] = price_income_transformation.apply(
+        alt_income[feasible_alts_step],
+        alt_price[feasible_alts_step] + price_step,
+        *price_income_params,
+    )
 
     # fix one price from changing
     # TODO pick price in a smarter way (PUMA with least change?)
@@ -126,24 +147,53 @@ def clear_market_iter (non_price_utilities, hhidx, choiceidx, supply, income, st
     # nonchanging for the purpose of calculating derivatives.
     # Nope, that won't work.
     # TODO is the above comment correct? how is this handled now?
-    deriv = compute_derivatives(price, alt_income, choiceidx, hhidx, non_price_utilities, budget, budget_step,
-                                price_step, budget_coef, shares, max_rent_to_income, feasible_alts,
-                                feasible_alts_step, weights)
+    deriv = compute_derivatives(
+        price,
+        alt_income,
+        choiceidx,
+        hhidx,
+        non_price_utilities,
+        budget,
+        budget_step,
+        price_step,
+        budget_coef,
+        shares,
+        max_rent_to_income,
+        feasible_alts,
+        feasible_alts_step,
+        weights,
+    )
 
     if not np.all(deriv < 0):
-        raise ValueError('some derivatives of price are nonnegative')
+        raise ValueError("some derivatives of price are nonnegative")
 
     # this is 7.7a from Tra's dissertation
     price = price - (excess_demand / deriv)
-    LOG.info(f'Max unit diff: {maxdiff}, max price diff: {maxpricediff}, '
-             + f'min price diff: {minpricediff}, additional excluded due to rent/income ration {deltaNExcluded}')
+    LOG.info(
+        f"Max unit diff: {maxdiff}, max price diff: {maxpricediff}, "
+        + f"min price diff: {minpricediff}, additional excluded due to rent/income ration {deltaNExcluded}"
+    )
 
     return price, False  # not converged yet (or we don't know anyhow)
 
 
 # @numba.jit(nopython=True) seems to slow things down but I may just not be letting it warm up
-def compute_derivatives (price, alt_income, choiceidx, hhidx, non_price_utilities, budget, budget_step, price_step,
-                         budget_coef, base_shares, max_rent_to_income, feasible_alts, feasible_alts_step, weights):
+def compute_derivatives(
+    price,
+    alt_income,
+    choiceidx,
+    hhidx,
+    non_price_utilities,
+    budget,
+    budget_step,
+    price_step,
+    budget_coef,
+    base_shares,
+    max_rent_to_income,
+    feasible_alts,
+    feasible_alts_step,
+    weights,
+):
     deriv = np.zeros_like(price)
 
     base_exp_utilities = np.exp(non_price_utilities + budget_coef * budget)
@@ -153,8 +203,10 @@ def compute_derivatives (price, alt_income, choiceidx, hhidx, non_price_utilitie
     step_exp_utilities = np.exp(non_price_utilities + budget_coef * budget_step)
     step_exp_utilities[~feasible_alts_step] = 0
 
-    if not np.all(np.isfinite(exp_utilities)) or not np.all(np.isfinite(step_exp_utilities)):
-        raise FloatingPointError('Not all exp(utilities) are finite (scaling?)')
+    if not np.all(np.isfinite(exp_utilities)) or not np.all(
+        np.isfinite(step_exp_utilities)
+    ):
+        raise FloatingPointError("Not all exp(utilities) are finite (scaling?)")
 
     # cache weights
     if weights is not None:
@@ -174,8 +226,19 @@ def compute_derivatives (price, alt_income, choiceidx, hhidx, non_price_utilitie
     return deriv
 
 
-def compute_shares (price, supply, alt_income, choiceidx, hhidx, non_price_utilities, price_income_transformation,
-                    price_income_params, budget_coef, max_rent_to_income, weights):
+def compute_shares(
+    price,
+    supply,
+    alt_income,
+    choiceidx,
+    hhidx,
+    non_price_utilities,
+    price_income_transformation,
+    price_income_params,
+    budget_coef,
+    max_rent_to_income,
+    weights,
+):
     alt_price = price[choiceidx]
 
     # unfortunately feasible alts does need to be recalculated on each iter as prices may change
@@ -185,14 +248,17 @@ def compute_shares (price, supply, alt_income, choiceidx, hhidx, non_price_utili
         feasible_alts = alt_income * max_rent_to_income > alt_price
 
     budgets = np.zeros_like(alt_price)
-    budgets[feasible_alts] = price_income_transformation.apply(alt_income[feasible_alts],
-                                                               alt_price[feasible_alts], *price_income_params)
+    budgets[feasible_alts] = price_income_transformation.apply(
+        alt_income[feasible_alts], alt_price[feasible_alts], *price_income_params
+    )
     full_utilities = non_price_utilities + budget_coef * budgets
     exp_utility = np.exp(full_utilities)
-    exp_utility[~feasible_alts] = 0  # will force choice probability to zero for infeasible alts
+    exp_utility[
+        ~feasible_alts
+    ] = 0  # will force choice probability to zero for infeasible alts
 
     if not np.all(np.isfinite(exp_utility)):
-        raise FloatingPointError('Not all exp(utilities) are finite (scaling?)')
+        raise FloatingPointError("Not all exp(utilities) are finite (scaling?)")
 
     expsums = np.bincount(hhidx, weights=exp_utility)
     probs = exp_utility / expsums[hhidx]

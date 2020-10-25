@@ -37,7 +37,7 @@ LOG = getLogger(__name__)
 
 
 class TraSortingModel(BaseSortingModel):
-    '''
+    """
     The variety of sorting model described in Tra CI (2013) Measuring the General Equilibrium Benefits of Air Quality
     Regulation in Small Urban Areas. Land Economics 89(2): 291–307.
 
@@ -53,16 +53,35 @@ class TraSortingModel(BaseSortingModel):
     choice," that is it can model a joint choice between a good for which prices are adjusted to bring the market to
     equilibrium and one for which they are not. In my dissertation I use this to model the joint choice of housing
     (equilibrated good) and vehicle ownership (unequilibrated good).
-    '''
+    """
 
-    def __init__ (self, housing_attributes, household_attributes, interactions, unequilibrated_hh_params,
-                  unequilibrated_hsg_params, second_stage_params, price, income, choice, unequilibrated_choice,
-                  price_income_transformation=price_income.logdiff, price_income_starting_values=[],
-                  endogenous_variable_defs: Dict[str, Callable[[Any, Any], float]] = None,
-                  neighborhoods=None, sample_alternatives=None, method='L-BFGS-B', minimize_options={},
-                  max_rent_to_income=None, household_housing_attributes=None, weights=None, max_chunk_bytes=2e9,
-                  est_first_stage_ses=True, seed=None):
-        '''
+    def __init__(
+        self,
+        housing_attributes,
+        household_attributes,
+        interactions,
+        unequilibrated_hh_params,
+        unequilibrated_hsg_params,
+        second_stage_params,
+        price,
+        income,
+        choice,
+        unequilibrated_choice,
+        price_income_transformation=price_income.logdiff,
+        price_income_starting_values=[],
+        endogenous_variable_defs: Dict[str, Callable[[Any, Any], float]] = None,
+        neighborhoods=None,
+        sample_alternatives=None,
+        method="L-BFGS-B",
+        minimize_options={},
+        max_rent_to_income=None,
+        household_housing_attributes=None,
+        weights=None,
+        max_chunk_bytes=2e9,
+        est_first_stage_ses=True,
+        seed=None,
+    ):
+        """
         Initialize a Tra sorting model
 
         :param housing_attributes: Attributes of housing choices. Price should not be an attribute here.
@@ -139,7 +158,7 @@ class TraSortingModel(BaseSortingModel):
 
         :param seed: seed for the random number generator used in sampling alternatives
         :type seed: int
-        '''
+        """
         self.housing_attributes = housing_attributes
         self.household_attributes = household_attributes
         self.household_housing_attributes = household_housing_attributes
@@ -149,7 +168,9 @@ class TraSortingModel(BaseSortingModel):
         self.orig_price = self.price.copy()
         self.income = income.reindex(household_attributes.index)
         self.choice = choice.reindex(household_attributes.index)
-        self.unequilibrated_choice = unequilibrated_choice.reindex(household_attributes.index)
+        self.unequilibrated_choice = unequilibrated_choice.reindex(
+            household_attributes.index
+        )
         self.unequilibrated_hh_params = unequilibrated_hh_params
         self.unequilibrated_hsg_params = unequilibrated_hsg_params
         self.sample_alternatives = sample_alternatives
@@ -183,73 +204,101 @@ class TraSortingModel(BaseSortingModel):
 
         self.creation_time = datetime.datetime.today()
 
-        assert price_income_transformation.n_params == 0,\
-            'Parameterized price_income_transformations not currently supported'
+        assert (
+            price_income_transformation.n_params == 0
+        ), "Parameterized price_income_transformations not currently supported"
 
-    def validate (self):
+    def validate(self):
         # TODO this could easily be moved to a new file
         allPassed = True
 
-        choiceCount = self.choice.value_counts().reindex(self.housing_attributes.index, fill_value=0)
+        choiceCount = self.choice.value_counts().reindex(
+            self.housing_attributes.index, fill_value=0
+        )
         if not np.all(choiceCount > 0):
-            choiceList = ' - ' + '\n - '.join(choiceCount.index[choiceCount == 0])
-            LOG.error(f'Some housing alternatives are not chosen by any households!\n{choiceList}')
+            choiceList = " - " + "\n - ".join(choiceCount.index[choiceCount == 0])
+            LOG.error(
+                f"Some housing alternatives are not chosen by any households!\n{choiceList}"
+            )
             allPassed = False
 
-        if (self.max_rent_to_income is not None
-                and not np.all(self.income.values * self.max_rent_to_income > self.price.loc[self.choice].values)):
-            LOG.error('Some households pay more in rent than the max rent to income ratio')
+        if self.max_rent_to_income is not None and not np.all(
+            self.income.values * self.max_rent_to_income
+            > self.price.loc[self.choice].values
+        ):
+            LOG.error(
+                "Some households pay more in rent than the max rent to income ratio"
+            )
             allPassed = False
 
         for hhattr, hsgattr in self.interactions:
             if hhattr not in self.household_attributes.columns:
-                LOG.error(f'Attribute {hhattr} is used in interactions but is not in household_attributes')
+                LOG.error(
+                    f"Attribute {hhattr} is used in interactions but is not in household_attributes"
+                )
                 allPassed = False
 
             if self.household_attributes[hhattr].isnull().any():
-                LOG.error(f'Attribute {hhattr} contains NaNs')
+                LOG.error(f"Attribute {hhattr} contains NaNs")
                 allPassed = False
 
             if hsgattr not in self.housing_attributes.columns:
-                if self.endogenous_variable_defs is None or hsgattr not in self.endogenous_variable_defs:
-                    LOG.error(f'Attribute {hsgattr} is used in interactions but is not in housing_attributes')
+                if (
+                    self.endogenous_variable_defs is None
+                    or hsgattr not in self.endogenous_variable_defs
+                ):
+                    LOG.error(
+                        f"Attribute {hsgattr} is used in interactions but is not in housing_attributes"
+                    )
                     allPassed = False
 
-            if hsgattr in self.housing_attributes.columns and self.endogenous_variable_defs is not None\
-                    and hsgattr in self.endogenous_variable_defs:
-                LOG.error(f'{hsgattr} in both housing_attributes and endogenous variables')
+            if (
+                hsgattr in self.housing_attributes.columns
+                and self.endogenous_variable_defs is not None
+                and hsgattr in self.endogenous_variable_defs
+            ):
+                LOG.error(
+                    f"{hsgattr} in both housing_attributes and endogenous variables"
+                )
                 allPassed = False
 
-            if hsgattr in self.housing_attributes.columns and self.housing_attributes[hsgattr].isnull().any():
-                LOG.error(f'Attribute {hsgattr} contains NaNs')
+            if (
+                hsgattr in self.housing_attributes.columns
+                and self.housing_attributes[hsgattr].isnull().any()
+            ):
+                LOG.error(f"Attribute {hsgattr} contains NaNs")
                 allPassed = False
 
         if self.second_stage_params is not None:
             for hsgattr in self.second_stage_params:
                 if hsgattr not in self.housing_attributes.columns:
-                    LOG.error(f'Attribute {hsgattr} is used in second stage but is not in housing_attributes')
+                    LOG.error(
+                        f"Attribute {hsgattr} is used in second stage but is not in housing_attributes"
+                    )
                     allPassed = False
 
                 if self.housing_attributes[hsgattr].isnull().any():
-                    LOG.error(f'Attribute {hsgattr} contains NaNs')
+                    LOG.error(f"Attribute {hsgattr} contains NaNs")
                     allPassed = False
 
         if self.endogenous_variable_defs is not None:
             if self.neighborhoods is None:
-                LOG.error('Neighborhoods required when endogenous variables in use')
+                LOG.error("Neighborhoods required when endogenous variables in use")
                 allPassed = False
             if self.neighborhoods.isnull().any():
-                LOG.error('All choices must have a neighborhood defined')
+                LOG.error("All choices must have a neighborhood defined")
                 allPassed = False
 
         # TODO more checks
         if allPassed:
-            LOG.info('All validation checks passed!')
+            LOG.info("All validation checks passed!")
         else:
-            raise ValueError('Some validation checks failed (see log messages)')
+            raise ValueError("Some validation checks failed (see log messages)")
 
-    def materialize_alternatives (self, hhidx, choiceidx, uneqchoiceidx, hh_hsgidx=None, price_income_params=None):
-        '''
+    def materialize_alternatives(
+        self, hhidx, choiceidx, uneqchoiceidx, hh_hsgidx=None, price_income_params=None
+    ):
+        """
         Materialize the alternatives for hhidx, choiceidx, and uneqchoiceidx, and return them.
 
         These should be formatted like so, with hhidx changing slowest and uneqchoiceidx changing fastest.
@@ -262,7 +311,7 @@ class TraSortingModel(BaseSortingModel):
 
         hh_hsgidx is the integer indices in household_housing_attributes for the selected household/housing combinations, same length
         as hhidx etc.
-        '''
+        """
         start_time = time.perf_counter()
 
         if price_income_params is None:
@@ -274,27 +323,32 @@ class TraSortingModel(BaseSortingModel):
         if self.household_housing_attributes is not None:
             assert hh_hsgidx is not None and len(hhidx) == len(hh_hsgidx)
 
-        LOG.info(f'materializing {len(hhidx)} choices')
+        LOG.info(f"materializing {len(hhidx)} choices")
 
         # first, create data for the interactions
         colnames = []
 
         # + 1 for budget param
-        ncols = len(self.interactions) + (len(self.unequilibrated_hh_params) +\
-            len(self.unequilibrated_hsg_params)) * (len(self.unequilibrated_choice_xwalk) - 1) +\
-                 1
+        ncols = (
+            len(self.interactions)
+            + (len(self.unequilibrated_hh_params) + len(self.unequilibrated_hsg_params))
+            * (len(self.unequilibrated_choice_xwalk) - 1)
+            + 1
+        )
 
         if self.household_housing_attributes is not None:
             ncols += len(self.household_housing_attributes.columns)
 
-        LOG.info(f'Allocating alternatives array of size {human_bytes(len(hhidx) * ncols * 8)}')
+        LOG.info(
+            f"Allocating alternatives array of size {human_bytes(len(hhidx) * ncols * 8)}"
+        )
         alternatives = np.zeros((len(hhidx), ncols))
 
         # budget is first column, to make updates easier
         current_col = 0
-        colnames.append('budget')
-        alt_income = self.income.astype('float64').values[hhidx]
-        alt_price = self.price.astype('float64').values[choiceidx]
+        colnames.append("budget")
+        alt_income = self.income.astype("float64").values[hhidx]
+        alt_price = self.price.astype("float64").values[choiceidx]
 
         # don't calc buget for options not in choice set
         # it may throw an error (e.g. log(neg) for logdiff)
@@ -303,61 +357,84 @@ class TraSortingModel(BaseSortingModel):
         else:
             feasible_alts = np.full(len(alt_income), True)
 
-        LOG.info(f'{np.sum(feasible_alts)} options appear in choice sets')
+        LOG.info(f"{np.sum(feasible_alts)} options appear in choice sets")
 
         budget = np.full(len(hhidx), np.nan)
-        budget[feasible_alts] = self.price_income_transformation.apply(alt_income[feasible_alts], alt_price[feasible_alts], *price_income_params)
-        assert not np.any(np.isnan(budget[feasible_alts])) # should be no nans left
-        alternatives[:,current_col] = budget
+        budget[feasible_alts] = self.price_income_transformation.apply(
+            alt_income[feasible_alts], alt_price[feasible_alts], *price_income_params
+        )
+        assert not np.any(np.isnan(budget[feasible_alts]))  # should be no nans left
+        alternatives[:, current_col] = budget
         current_col += 1
-        del alt_income, alt_price, budget # save memory
+        del alt_income, alt_price, budget  # save memory
 
         for hh_attr, hsg_attr in self.interactions:
             if hsg_attr in self.housing_attributes.columns:
                 # TODO lots of type conversion happening here. Could maybe refactor to do less.
                 alternatives[:, current_col] = (
-                    self.household_attributes[hh_attr].astype('float64').values[hhidx]
-                    * self.housing_attributes[hsg_attr].astype('float64').values[choiceidx]
+                    self.household_attributes[hh_attr].astype("float64").values[hhidx]
+                    * self.housing_attributes[hsg_attr]
+                    .astype("float64")
+                    .values[choiceidx]
                 )
             elif hsg_attr in self.endogenous_varnames:
                 endogenous_col = self.endogenous_varnames.index(hsg_attr)
                 alternatives[:, current_col] = (
-                    self.household_attributes[hh_attr].astype('float64').values[hhidx]
-                    * self.endogenous_variables[self.nbhd_for_choice[choiceidx], endogenous_col]
+                    self.household_attributes[hh_attr].astype("float64").values[hhidx]
+                    * self.endogenous_variables[
+                        self.nbhd_for_choice[choiceidx], endogenous_col
+                    ]
                 )
             else:
-                raise KeyError(f'{hsg_attr} is not a housing attribute, exogenous or endogenous')
-            colnames.append(f'{hh_attr}:{hsg_attr}')
+                raise KeyError(
+                    f"{hsg_attr} is not a housing attribute, exogenous or endogenous"
+                )
+            colnames.append(f"{hh_attr}:{hsg_attr}")
             current_col += 1
 
         # now add the attributes for the unequilibrated choice
         for param in self.unequilibrated_hh_params:
-            vals = self.household_attributes[param].astype('float64').values[hhidx]
+            vals = self.household_attributes[param].astype("float64").values[hhidx]
             for uneqchoice in range(1, len(self.unequilibrated_choice_xwalk)):
                 # fill all rows that are not for this unequilibrated choice with 0s
-                alternatives[:,current_col] = np.choose(uneqchoiceidx == uneqchoice, [0, vals])
-                colnames.append(f'{param}:uneq_choice_{self.unequilibrated_choice_xwalk[self.unequilibrated_choice_xwalk == uneqchoice].index[0]}')
+                alternatives[:, current_col] = np.choose(
+                    uneqchoiceidx == uneqchoice, [0, vals]
+                )
+                colnames.append(
+                    f"{param}:uneq_choice_{self.unequilibrated_choice_xwalk[self.unequilibrated_choice_xwalk == uneqchoice].index[0]}"
+                )
                 current_col += 1
 
         for param in self.unequilibrated_hsg_params:
-            vals = self.housing_attributes[param].astype('float64').values[choiceidx]
+            vals = self.housing_attributes[param].astype("float64").values[choiceidx]
             for uneqchoice in range(1, len(self.unequilibrated_choice_xwalk)):
                 # fill all rows that are not for this unequilibrated choice with 0s
-                alternatives[:,current_col] = np.choose(uneqchoiceidx == uneqchoice, [0, vals])
-                colnames.append(f'{param}:uneq_choice_{self.unequilibrated_choice_xwalk[self.unequilibrated_choice_xwalk == uneqchoice].index[0]}')
+                alternatives[:, current_col] = np.choose(
+                    uneqchoiceidx == uneqchoice, [0, vals]
+                )
+                colnames.append(
+                    f"{param}:uneq_choice_{self.unequilibrated_choice_xwalk[self.unequilibrated_choice_xwalk == uneqchoice].index[0]}"
+                )
                 current_col += 1
 
         if self.household_housing_attributes is not None:
             for c in self.household_housing_attributes.columns:
                 colnames.append(c)
 
-            alternatives[:,current_col:current_col + len(self.household_housing_attributes.columns)] =\
-                self.household_housing_attributes.values[hh_hsgidx, :]
+            alternatives[
+                :,
+                current_col : current_col
+                + len(self.household_housing_attributes.columns),
+            ] = self.household_housing_attributes.values[hh_hsgidx, :]
             current_col += len(self.household_housing_attributes.columns)
 
         total_time = time.perf_counter() - start_time
-        LOG.info(f'Materialized alternatives into {human_shape(alternatives.shape)} array using {human_bytes(alternatives.nbytes)} in {human_time(total_time)}')
-        self.alternatives_colnames = colnames # hacky to set this every time but it never changes
+        LOG.info(
+            f"Materialized alternatives into {human_shape(alternatives.shape)} array using {human_bytes(alternatives.nbytes)} in {human_time(total_time)}"
+        )
+        self.alternatives_colnames = (
+            colnames  # hacky to set this every time but it never changes
+        )
 
         if self.alternatives_stds is None:
             self.alternatives_stds = np.std(alternatives, axis=0)
@@ -366,30 +443,49 @@ class TraSortingModel(BaseSortingModel):
 
         return alternatives
 
-    def create_alternatives (self):
-        LOG.info('Creating alternatives')
+    def create_alternatives(self):
+        LOG.info("Creating alternatives")
         startTime = time.perf_counter()
 
-        LOG.info('Converting pandas data to numpy')
-        self.housing_xwalk = pd.Series(np.arange(len(self.housing_attributes)), index=self.housing_attributes.index)
+        LOG.info("Converting pandas data to numpy")
+        self.housing_xwalk = pd.Series(
+            np.arange(len(self.housing_attributes)), index=self.housing_attributes.index
+        )
 
         # we always have an unequilibrated choice to simplify coding, it is just only a single choice if not specified
         # good ol' mononomial logit model
-        unequilibrated_choice = self.unequilibrated_choice.copy() if self.unequilibrated_choice is not None else pd.Series(np.zeros(len(self.choice), index=self.choice.index))
+        unequilibrated_choice = (
+            self.unequilibrated_choice.copy()
+            if self.unequilibrated_choice is not None
+            else pd.Series(np.zeros(len(self.choice), index=self.choice.index))
+        )
         unique_unequilibrated_choices = unequilibrated_choice.unique()
-        self.unequilibrated_choice_xwalk = pd.Series(np.arange(len(unique_unequilibrated_choices)),
-                                                     index=unique_unequilibrated_choices)
-        self.hh_xwalk = pd.Series(np.arange(len(self.household_attributes)), index=self.household_attributes.index)
+        self.unequilibrated_choice_xwalk = pd.Series(
+            np.arange(len(unique_unequilibrated_choices)),
+            index=unique_unequilibrated_choices,
+        )
+        self.hh_xwalk = pd.Series(
+            np.arange(len(self.household_attributes)),
+            index=self.household_attributes.index,
+        )
 
-        self.hh_hsg_choice = self.housing_xwalk.loc[self.choice.loc[self.hh_xwalk.index]].values
-        self.hh_unequilibrated_choice = self.unequilibrated_choice_xwalk.loc[self.unequilibrated_choice.loc[self.hh_xwalk.index]].values
+        self.hh_hsg_choice = self.housing_xwalk.loc[
+            self.choice.loc[self.hh_xwalk.index]
+        ].values
+        self.hh_unequilibrated_choice = self.unequilibrated_choice_xwalk.loc[
+            self.unequilibrated_choice.loc[self.hh_xwalk.index]
+        ].values
 
         if self.endogenous_variable_defs is not None:
             # neighborhood indices
             unique_neighborhoods = self.neighborhoods.unique()
-            self.nbhd_xwalk = pd.Series(np.arange(len(unique_neighborhoods)), index=unique_neighborhoods)
+            self.nbhd_xwalk = pd.Series(
+                np.arange(len(unique_neighborhoods)), index=unique_neighborhoods
+            )
             # neighborhood for each housing choice, neighborhood index for each neighborhood
-            self.nbhd_for_choice = self.nbhd_xwalk.loc[self.neighborhoods.loc[self.housing_xwalk.index]].values  # index is sorted
+            self.nbhd_for_choice = self.nbhd_xwalk.loc[
+                self.neighborhoods.loc[self.housing_xwalk.index]
+            ].values  # index is sorted
         else:
             self.nbhd_xwalk = self.nbhd_for_choice = None
 
@@ -401,12 +497,25 @@ class TraSortingModel(BaseSortingModel):
         # uneqchoiceidx: 0 1 2 0 1 2 0 1 2 0 1 2 0 1 2 0 1 2 0 1 2 0 1 2 0 1 2
         # NB this could also be conceptualized as a four-dimensional array (household * housing choice * unequilibrated choice * variables)
         # but, uh, let's not
-        LOG.info('Indexing full alternatives dataset')
-        self.full_hhidx = np.repeat(np.arange(len(self.household_attributes)), len(self.housing_attributes) * len(unique_unequilibrated_choices))
-        self.full_choiceidx = np.repeat(np.tile(np.arange(len(self.housing_attributes)), len(self.household_attributes)), len(unique_unequilibrated_choices))
-        self.full_uneqchoiceidx = np.tile(np.arange(len(unique_unequilibrated_choices)), len(self.housing_attributes) * len(self.household_attributes))
-        self.full_hsgchosen = (self.hh_hsg_choice[self.full_hhidx] == self.full_choiceidx)
-        self.full_uneqchosen = (self.hh_unequilibrated_choice[self.full_hhidx] == self.full_uneqchoiceidx)
+        LOG.info("Indexing full alternatives dataset")
+        self.full_hhidx = np.repeat(
+            np.arange(len(self.household_attributes)),
+            len(self.housing_attributes) * len(unique_unequilibrated_choices),
+        )
+        self.full_choiceidx = np.repeat(
+            np.tile(
+                np.arange(len(self.housing_attributes)), len(self.household_attributes)
+            ),
+            len(unique_unequilibrated_choices),
+        )
+        self.full_uneqchoiceidx = np.tile(
+            np.arange(len(unique_unequilibrated_choices)),
+            len(self.housing_attributes) * len(self.household_attributes),
+        )
+        self.full_hsgchosen = self.hh_hsg_choice[self.full_hhidx] == self.full_choiceidx
+        self.full_uneqchosen = (
+            self.hh_unequilibrated_choice[self.full_hhidx] == self.full_uneqchoiceidx
+        )
         self.full_chosen = self.full_hsgchosen & self.full_uneqchosen
 
         # create indices into the hh_housing_attributes so we can use it like a numpy array rather than with slow Pandas indexing
@@ -415,14 +524,26 @@ class TraSortingModel(BaseSortingModel):
         # and select from household_housing_attributes.
         if self.household_housing_attributes is not None:
             # do this in chunks to save memory
-            self.full_hh_hsgidx = np.full_like(self.full_hhidx, -1, dtype='int32')
-            hh_hsg_loc = pd.Series(np.arange(len(self.household_housing_attributes)), index=self.household_housing_attributes.index)
+            self.full_hh_hsgidx = np.full_like(self.full_hhidx, -1, dtype="int32")
+            hh_hsg_loc = pd.Series(
+                np.arange(len(self.household_housing_attributes)),
+                index=self.household_housing_attributes.index,
+            )
             for chunk_start in range(0, len(self.full_hhidx), 100000):
-                chunk_end = min(chunk_start + 100000, len(self.household_housing_attributes))
-                self.full_hh_hsgidx[chunk_start:chunk_end] =\
-                    hh_hsg_loc.loc[list(zip(self.hh_xwalk.index[self.full_hhidx[chunk_start:chunk_end]],
-                    self.housing_xwalk.index[self.full_choiceidx[chunk_start:chunk_end]]))].values
-            del hh_hsg_loc # save memory
+                chunk_end = min(
+                    chunk_start + 100000, len(self.household_housing_attributes)
+                )
+                self.full_hh_hsgidx[chunk_start:chunk_end] = hh_hsg_loc.loc[
+                    list(
+                        zip(
+                            self.hh_xwalk.index[self.full_hhidx[chunk_start:chunk_end]],
+                            self.housing_xwalk.index[
+                                self.full_choiceidx[chunk_start:chunk_end]
+                            ],
+                        )
+                    )
+                ].values
+            del hh_hsg_loc  # save memory
         else:
             self.full_hh_hsgidx = None
 
@@ -431,8 +552,14 @@ class TraSortingModel(BaseSortingModel):
 
         if self.sample_alternatives is None or self.sample_alternatives <= 0:
             if self.max_rent_to_income is None:
-                self.alternatives = self.materialize_alternatives(self.full_hhidx, self.full_choiceidx, self.full_uneqchoiceidx,
-                    self.full_hh_hsgidx if self.household_housing_attributes is not None else None)
+                self.alternatives = self.materialize_alternatives(
+                    self.full_hhidx,
+                    self.full_choiceidx,
+                    self.full_uneqchoiceidx,
+                    self.full_hh_hsgidx
+                    if self.household_housing_attributes is not None
+                    else None,
+                )
                 self.alternatives_hhidx = self.full_hhidx
                 self.alternatives_choiceidx = self.full_choiceidx
                 self.alternatives_uneqchoiceidx = self.full_uneqchoiceidx
@@ -441,22 +568,27 @@ class TraSortingModel(BaseSortingModel):
                 self.alternatives_chosen = self.full_chosen
             else:
                 # TODO
-                raise ValueError('max_rent_to_income with no sampling is unimplemented')
+                raise ValueError("max_rent_to_income with no sampling is unimplemented")
 
         else:
-            LOG.info('Sampling alternatives')
+            LOG.info("Sampling alternatives")
             if self.max_rent_to_income is None:
                 # note that we do not include the other unequilibrated choises for the chosen housing unit here, so they are not selected
                 # randomly. We are randomly sampling housing alternatives, but always use all unequilibrated alternatives.
                 feasible_unchosen_alts = ~self.full_hsgchosen
             else:
-                feasible_unchosen_alts = (self.income.astype('float64').values[self.full_hhidx] * self.max_rent_to_income >\
-                    self.price.astype('float64').values[self.full_choiceidx]) & ~self.full_hsgchosen
+                feasible_unchosen_alts = (
+                    self.income.astype("float64").values[self.full_hhidx]
+                    * self.max_rent_to_income
+                    > self.price.astype("float64").values[self.full_choiceidx]
+                ) & ~self.full_hsgchosen
 
             # unequilibrated alternatives are not sampled
-            n_housing_alts_per_hh = np.bincount(self.full_hhidx[feasible_unchosen_alts]) / len(self.unequilibrated_choice_xwalk)
+            n_housing_alts_per_hh = np.bincount(
+                self.full_hhidx[feasible_unchosen_alts]
+            ) / len(self.unequilibrated_choice_xwalk)
 
-            def random_sel (n):
+            def random_sel(n):
                 if n <= self.sample_alternatives - 1:
                     return np.repeat([True], n)
                 else:
@@ -467,14 +599,20 @@ class TraSortingModel(BaseSortingModel):
             # since households are the outermost index, and unequilibrated choices are the innermost index, we can get away with this
             # the repeat() makes sure all unquilibrated alternatives are selected (recall they are always adjacent), and concatenating
             # is correct since households are the slowest-changing index
-            sampled_mask = np.concatenate([
-                np.repeat(random_sel(n), len(self.unequilibrated_choice_xwalk))
-                for n in n_housing_alts_per_hh
-            ])
+            sampled_mask = np.concatenate(
+                [
+                    np.repeat(random_sel(n), len(self.unequilibrated_choice_xwalk))
+                    for n in n_housing_alts_per_hh
+                ]
+            )
 
-            unchosen_sampled_idxs = np.arange(len(self.full_hhidx))[feasible_unchosen_alts][sampled_mask]
+            unchosen_sampled_idxs = np.arange(len(self.full_hhidx))[
+                feasible_unchosen_alts
+            ][sampled_mask]
             del sampled_mask
-            chosen_idxs = np.arange(len(self.full_hhidx))[self.full_hsgchosen] # we do not sample uneq alternatives
+            chosen_idxs = np.arange(len(self.full_hhidx))[
+                self.full_hsgchosen
+            ]  # we do not sample uneq alternatives
 
             sampled_idxs = np.concatenate([unchosen_sampled_idxs, chosen_idxs])
             # put them back in the household > housing > uneq order
@@ -490,24 +628,36 @@ class TraSortingModel(BaseSortingModel):
                 self.alternatives_hh_hsgidx = self.full_hh_hsgidx[sampled_idxs]
             else:
                 self.alternatives_hh_hsgidx = None
-            self.alternatives = self.materialize_alternatives(self.alternatives_hhidx, self.alternatives_choiceidx, self.alternatives_uneqchoiceidx,
-                self.alternatives_hh_hsgidx if self.household_housing_attributes is not None else None)
+            self.alternatives = self.materialize_alternatives(
+                self.alternatives_hhidx,
+                self.alternatives_choiceidx,
+                self.alternatives_uneqchoiceidx,
+                self.alternatives_hh_hsgidx
+                if self.household_housing_attributes is not None
+                else None,
+            )
 
         endTime = time.perf_counter()
-        LOG.info(f'Created alternatives for {len(self.household_attributes)} households in {endTime - startTime:.3f} seconds')
-        LOG.info(f'Alternatives dimensions: {human_shape(self.alternatives.shape)}')
-        LOG.info(f'Alternatives use {human_bytes(self.alternatives.nbytes)} memory')
+        LOG.info(
+            f"Created alternatives for {len(self.household_attributes)} households in {endTime - startTime:.3f} seconds"
+        )
+        LOG.info(f"Alternatives dimensions: {human_shape(self.alternatives.shape)}")
+        LOG.info(f"Alternatives use {human_bytes(self.alternatives.nbytes)} memory")
 
-    def chunked_full_alternatives (self, price_income_params):
-        '''
+    def chunked_full_alternatives(self, price_income_params):
+        """
         With large sorting models it is not possible to materialize the entire dataset all at once, as we will quickly run out of memory.
         This function realizes the full alternatives in chunks and yields tuples of (chunk_start, chunk_end, chunk_alts).
 
         This is useful to calculate e.g. a utility, which can be calculated in chunks by decomposing the matrix multiplication and then concatenating.
-        '''
+        """
 
-        chunk_rows = int(np.floor(self.max_chunk_bytes / len(self.alternatives_colnames) / 8)) # bytes per float64
-        LOG.info(f'Materializing full alternatives using {len(self.full_hhidx) // chunk_rows + 1} chunks of {chunk_rows} rows each ({human_bytes(chunk_rows * len(self.alternatives_colnames) * 8)} each)')
+        chunk_rows = int(
+            np.floor(self.max_chunk_bytes / len(self.alternatives_colnames) / 8)
+        )  # bytes per float64
+        LOG.info(
+            f"Materializing full alternatives using {len(self.full_hhidx) // chunk_rows + 1} chunks of {chunk_rows} rows each ({human_bytes(chunk_rows * len(self.alternatives_colnames) * 8)} each)"
+        )
 
         for chunk_start in range(0, len(self.full_hhidx), chunk_rows):
             chunk_end = min(chunk_start + chunk_rows, len(self.full_hhidx))
@@ -515,48 +665,63 @@ class TraSortingModel(BaseSortingModel):
                 self.full_hhidx[chunk_start:chunk_end],
                 self.full_choiceidx[chunk_start:chunk_end],
                 self.full_uneqchoiceidx[chunk_start:chunk_end],
-                self.full_hh_hsgidx[chunk_start:chunk_end] if self.household_housing_attributes is not None else None,
-                price_income_params=price_income_params
+                self.full_hh_hsgidx[chunk_start:chunk_end]
+                if self.household_housing_attributes is not None
+                else None,
+                price_income_params=price_income_params,
             )
             yield chunk_start, chunk_end, chunk_alts
 
-    def full_utility (self, include_budget=True, include_ascs=True):
-        '''
+    def full_utility(self, include_budget=True, include_ascs=True):
+        """
         Calculate full utilities (i.e. utilities for all alternatives, not just sampled ones). To remain within available memory,
         this in chunks.
-        '''
+        """
 
-        utility = np.full_like(self.full_choiceidx, np.nan, dtype='float64')
+        utility = np.full_like(self.full_choiceidx, np.nan, dtype="float64")
         # convert supply to an np array
         lnsupply = np.log(self.weighted_supply.loc[self.housing_xwalk.index].values)
 
         if self.price_income_transformation.n_params > 0:
-            coefs = self.first_stage_fit.params.values[:-self.price_income_transformation.n_params]
-            price_income_params = self.first_stage_fit.params.values[-self.price_income_transformation.n_params:]
+            coefs = self.first_stage_fit.params.values[
+                : -self.price_income_transformation.n_params
+            ]
+            price_income_params = self.first_stage_fit.params.values[
+                -self.price_income_transformation.n_params :
+            ]
         else:
             coefs = self.first_stage_fit.params.values
             price_income_params = np.zeros(0)
 
-        for chunk_start, chunk_end, chunk_alts in self.chunked_full_alternatives(price_income_params):
+        for chunk_start, chunk_end, chunk_alts in self.chunked_full_alternatives(
+            price_income_params
+        ):
             if not include_budget:
                 # zero out budget so it does not affect utility. chunk_alts has been materialized just for us, okay
                 # to be destructive.
-                chunk_alts[:,0] = 0
+                chunk_alts[:, 0] = 0
 
             # add systematic utility and deterministic part of ASC based on market share
             # TODO okay to just add log(weighted) here when ASCs were calc'd with log(unweighted)? I think so.
-            utility[chunk_start:chunk_end] = np.dot(chunk_alts, coefs) +\
-                lnsupply[self.full_choiceidx[chunk_start:chunk_end]]
+            utility[chunk_start:chunk_end] = (
+                np.dot(chunk_alts, coefs)
+                + lnsupply[self.full_choiceidx[chunk_start:chunk_end]]
+            )
 
         if include_ascs:
-            utility += self.first_stage_ascs.values[self.full_choiceidx] + self.first_stage_uneq_ascs.values[self.full_uneqchoiceidx]
+            utility += (
+                self.first_stage_ascs.values[self.full_choiceidx]
+                + self.first_stage_uneq_ascs.values[self.full_uneqchoiceidx]
+            )
 
         return utility
 
-    def fit_first_stage (self):
-        LOG.info('fitting first stage')
+    def fit_first_stage(self):
+        LOG.info("fitting first stage")
 
-        self._log_supply = np.log(np.bincount(self.hh_hsg_choice))[self.alternatives_choiceidx]
+        self._log_supply = np.log(np.bincount(self.hh_hsg_choice))[
+            self.alternatives_choiceidx
+        ]
 
         self.first_stage_fit = MNLFullASC(
             alternatives=self.alternatives,
@@ -565,13 +730,16 @@ class TraSortingModel(BaseSortingModel):
             chosen=self.alternatives_chosen,
             supply=(
                 np.bincount(self.hh_hsg_choice),
-                np.bincount(self.hh_unequilibrated_choice)
+                np.bincount(self.hh_unequilibrated_choice),
             ),
-            starting_values=np.zeros(self.alternatives.shape[1], dtype='float64'),
-            param_names=[*self.alternatives_colnames, *self.price_income_transformation.param_names],
+            starting_values=np.zeros(self.alternatives.shape[1], dtype="float64"),
+            param_names=[
+                *self.alternatives_colnames,
+                *self.price_income_transformation.param_names,
+            ],
             method=self.method,
             minimize_options=self.minimize_options,
-            est_ses=self.est_first_stage_ses
+            est_ses=self.est_first_stage_ses,
         )
 
         self.first_stage_fit.fit()
@@ -587,8 +755,11 @@ class TraSortingModel(BaseSortingModel):
         if self.max_rent_to_income is None:
             feasible_alts = np.full(True, len(self.full_hhidx))
         else:
-            feasible_alts = (self.income.astype('float64').values[self.full_hhidx] * self.max_rent_to_income >\
-                self.price.astype('float64').values[self.full_choiceidx])
+            feasible_alts = (
+                self.income.astype("float64").values[self.full_hhidx]
+                * self.max_rent_to_income
+                > self.price.astype("float64").values[self.full_choiceidx]
+            )
 
         base_utility = self.full_utility(include_ascs=False)
 
@@ -603,16 +774,19 @@ class TraSortingModel(BaseSortingModel):
                 self.weighted_supply.loc[self.housing_xwalk.index].values,
                 # of unequilibrated choices
                 # While we don't (obviously) equilibrate unequilibrated choices, we do use their supply to find their ASCs in the first-stage fit
-                np.bincount(self.hh_unequilibrated_choice, self.weights.loc[self.hh_xwalk.index].values)
+                np.bincount(
+                    self.hh_unequilibrated_choice,
+                    self.weights.loc[self.hh_xwalk.index].values,
+                ),
             ),
             hhidx=self.full_hhidx[feasible_alts],
             choiceidx=(
                 self.full_choiceidx[feasible_alts],
-                self.full_uneqchoiceidx[feasible_alts]
+                self.full_uneqchoiceidx[feasible_alts],
             ),
             starting_values=self.first_stage_fit.ascs,
             weights=self.weights.loc[self.hh_xwalk.index].values,
-            log=True
+            log=True,
         )
         fullAscEndTime = time.perf_counter()
 
@@ -631,64 +805,83 @@ class TraSortingModel(BaseSortingModel):
         self.alternatives_stds = np.ones_like(self.alternatives_stds)
 
         self.first_stage_ascs = pd.Series(ascs[0], index=self.housing_xwalk.index)
-        self.first_stage_uneq_ascs = pd.Series(ascs[1], index=self.unequilibrated_choice_xwalk.index)
-        LOG.info(f'Finding full ASCs took {human_time(fullAscEndTime - fullAscStartTime)}')
+        self.first_stage_uneq_ascs = pd.Series(
+            ascs[1], index=self.unequilibrated_choice_xwalk.index
+        )
+        LOG.info(
+            f"Finding full ASCs took {human_time(fullAscEndTime - fullAscStartTime)}"
+        )
 
         # don't serialize
         self.first_stage_fit.alternatives = None
         self.first_stage_fit._log_supply = None
 
-    def fit_second_stage (self):
-        LOG.info('fitting second stage')
+    def fit_second_stage(self):
+        LOG.info("fitting second stage")
         startTime = time.perf_counter()
-        second_stage_exog = sm.add_constant(self.housing_attributes[self.second_stage_params])
+        second_stage_exog = sm.add_constant(
+            self.housing_attributes[self.second_stage_params]
+        )
         second_stage_endog = self.first_stage_ascs.reindex(second_stage_exog.index)
 
         mod = sm.OLS(second_stage_endog, second_stage_exog)
         self.second_stage_fit = mod.fit()
         self.type_shock = self.second_stage_fit.resid
         endTime = time.perf_counter()
-        LOG.info(f'Fit second stage in {endTime - startTime:.2f} seconds')
+        LOG.info(f"Fit second stage in {endTime - startTime:.2f} seconds")
 
-    def fit (self):
+    def fit(self):
         self.fit_first_stage()
         if self.second_stage_params is not None:
             self.fit_second_stage()
         else:
-            LOG.info('No second stage requested')
+            LOG.info("No second stage requested")
 
-    def sort (self, maxiter=np.inf):
-        '''
+    def sort(self, maxiter=np.inf):
+        """
         Clear the market with a change to supply
 
         TODO document which data structures can be changed and still have this function return correct results
-        '''
-        LOG.info('Clearing the market and sorting households')
-        LOG.info("There's nothing hidden in your head / the Sorting Hat can't see / so try me on and I will tell you /'\
-                 ' where you ought to be.\n" +\
-            "    -JK Rowling, Harry Potter and the Sorcerer's Stone")
+        """
+        LOG.info("Clearing the market and sorting households")
+        LOG.info(
+            "There's nothing hidden in your head / the Sorting Hat can't see / so try me on and I will tell you /'\
+                 ' where you ought to be.\n"
+            + "    -JK Rowling, Harry Potter and the Sorcerer's Stone"
+        )
 
         # convert supply to an np array
         supply = self.weighted_supply.loc[self.housing_xwalk.index].values
 
         # allow for slight floating point error several orders of magnitude smaller than convergence criterion
         if np.abs(np.sum(supply) - np.sum(self.weights)) > 1e-8:
-            raise ValueError(f'total supply has changed! expected {np.sum(self.weights)} but found {np.sum(supply)}')
+            raise ValueError(
+                f"total supply has changed! expected {np.sum(self.weights)} but found {np.sum(supply)}"
+            )
 
         # first update second stage
         if self.second_stage_params is not None:
-            LOG.info('updating second stage')
-            pred_ascs = self.second_stage_fit.predict(sm.add_constant(self.housing_attributes[self.second_stage_params])) + self.type_shock
+            LOG.info("updating second stage")
+            pred_ascs = (
+                self.second_stage_fit.predict(
+                    sm.add_constant(self.housing_attributes[self.second_stage_params])
+                )
+                + self.type_shock
+            )
 
             maxabsdiff = np.max(np.abs(pred_ascs - self.first_stage_ascs))
-            LOG.info(f'Second stage updated with changes to first-stage ASCs of up to {maxabsdiff:.2f}')
+            LOG.info(
+                f"Second stage updated with changes to first-stage ASCs of up to {maxabsdiff:.2f}"
+            )
             self.first_stage_ascs = pred_ascs
         else:
-            LOG.info('No second stage fit, not updating')
+            LOG.info("No second stage fit, not updating")
             pred_ascs = self.first_stage_ascs[0]
 
         if self.price_income_transformation.n_params > 0:
-            price_income_params = self.first_stage_fit.params.values[-self.price_income_params:]
+            price_income_params = self.first_stage_fit.params.values[
+                -self.price_income_params :
+            ]
         else:
             price_income_params = np.zeros(0)
 
@@ -696,13 +889,13 @@ class TraSortingModel(BaseSortingModel):
         startTimeClear = time.perf_counter()
         while True:
             if itr > maxiter:
-                LOG.error(f'Prices FAILED TO CONVERGE after {itr} iterations')
+                LOG.error(f"Prices FAILED TO CONVERGE after {itr} iterations")
                 break
             itr += 1
-            LOG.info(f'sorting: begin iteration {itr}')
+            LOG.info(f"sorting: begin iteration {itr}")
             self.initialize_or_update_endogenous_variables(initial=False)
 
-            LOG.info('finding non-price utilites')
+            LOG.info("finding non-price utilites")
             non_price_utilities = self.full_utility(include_budget=False)
             assert not np.any(np.isnan(non_price_utilities))
 
@@ -719,43 +912,48 @@ class TraSortingModel(BaseSortingModel):
                 starting_price=self.price.loc[self.housing_xwalk.index].values,
                 price_income_transformation=self.price_income_transformation,
                 price_income_params=price_income_params,
-                budget_coef=self.first_stage_fit.params['budget'],
+                budget_coef=self.first_stage_fit.params["budget"],
                 max_rent_to_income=self.max_rent_to_income,
-                weights=self.weights.loc[self.hh_xwalk.index].values if self.weights is not None else None
+                weights=self.weights.loc[self.hh_xwalk.index].values
+                if self.weights is not None
+                else None,
             )
 
             new_prices = pd.Series(new_prices, index=self.housing_xwalk.index)
             self.price = new_prices
 
             if converged:
-                LOG.info(f'prices converged after {itr} iterations')
+                LOG.info(f"prices converged after {itr} iterations")
                 break
 
         endTimeClear = time.perf_counter()
-        LOG.info(f'sorting took {human_time(endTimeClear - startTimeClear)}')
+        LOG.info(f"sorting took {human_time(endTimeClear - startTimeClear)}")
 
-    def initialize_or_update_endogenous_variables (self, initial: bool) -> None:
-        '''
+    def initialize_or_update_endogenous_variables(self, initial: bool) -> None:
+        """
         Initialize endogenous variables, or update them based on predicted probabilities after the model has been fit.
         :param initial: if True, will compute endogenous variables based on observed choices. If False, will compute
             based on predicted probabilities
         :type initial: bool
-        '''
+        """
         if self.endogenous_variable_defs is None:
-            LOG.info('not updating endogenous variables as none are defined')
+            LOG.info("not updating endogenous variables as none are defined")
         else:
             if initial:
                 # initial fit: use actual chosen values to compute endogenous variables
-                LOG.info('creating endogenous variables')
+                LOG.info("creating endogenous variables")
                 weighted_probs = self.full_hsgchosen
             else:
                 # if model is already fitted, update endogenous variables with fitted values
-                LOG.info('updating endogenous variables')
+                LOG.info("updating endogenous variables")
                 weighted_probs = self._probabilities()
 
             if self.weights is not None:
                 # if weights are present, use them
-                weighted_probs = weighted_probs * self.weights.loc[self.hh_xwalk.index].values[self.full_hhidx]
+                weighted_probs = (
+                    weighted_probs
+                    * self.weights.loc[self.hh_xwalk.index].values[self.full_hhidx]
+                )
 
             # if this is the initial run, initialize endogenous_varnames
             # need to materialize and save because dict.keys() order is not guaranteed, though in recent versions of
@@ -772,7 +970,7 @@ class TraSortingModel(BaseSortingModel):
             self.endogenous_variables = np.full(
                 (np.max(self.nbhd_for_choice) + 1, len(self.endogenous_varnames)),
                 np.nan,
-                'float64'
+                "float64",
             )
 
             # compute endogenous variables
@@ -786,69 +984,88 @@ class TraSortingModel(BaseSortingModel):
                 # endogenous_varnames is created by initialize_endogenous_variables
                 for i, varname in enumerate(self.endogenous_varnames):
                     func = self.endogenous_variable_defs[varname]
-                    self.endogenous_variables[neighborhood, i] = func(self.household_attributes, self.income, hhweights)
+                    self.endogenous_variables[neighborhood, i] = func(
+                        self.household_attributes, self.income, hhweights
+                    )
 
             # check our work
-            assert not np.any(np.isnan(self.endogenous_variables)), 'some endogenous variables are nan!'
+            assert not np.any(
+                np.isnan(self.endogenous_variables)
+            ), "some endogenous variables are nan!"
 
             if initial:
                 # save the initial variables for later comparison
                 # this array is never modified, an entirely new array is created when sorting, so no need to copy
                 self.orig_endogenous_variables = self.endogenous_variables
 
-    def _probabilities (self):
-        'Compute probabilities and return as numpy array, use .probabilities() for a Pandas data frame'
-        LOG.info('finding utility')
+    def _probabilities(self):
+        "Compute probabilities and return as numpy array, use .probabilities() for a Pandas data frame"
+        LOG.info("finding utility")
 
         if self.max_rent_to_income is None:
             feasible_alts = np.full(True, len(self.full_hhidx))
         else:
-            feasible_alts = (self.income.astype('float64').values[self.full_hhidx] * self.max_rent_to_income >\
-                self.price.astype('float64').values[self.full_choiceidx])
+            feasible_alts = (
+                self.income.astype("float64").values[self.full_hhidx]
+                * self.max_rent_to_income
+                > self.price.astype("float64").values[self.full_choiceidx]
+            )
 
         exp_utility = np.exp(self.full_utility()[feasible_alts])
         assert not np.any(np.isnan(exp_utility))
         expsums = np.bincount(self.full_hhidx[feasible_alts], exp_utility)
-        probs = np.zeros_like(self.full_choiceidx, dtype='float64')
+        probs = np.zeros_like(self.full_choiceidx, dtype="float64")
         # alts not in choice set b/c infeasible are left with probability zero
         probs[feasible_alts] = exp_utility / expsums[self.full_hhidx[feasible_alts]]
         return probs
 
-    def probabilities (self):
-        'Return choice probabilities as Pandas dataframe, with columns for household ID, choice ID, and uneq choice ID'
+    def probabilities(self):
+        "Return choice probabilities as Pandas dataframe, with columns for household ID, choice ID, and uneq choice ID"
         probs = self._probabilities()
-        return pd.DataFrame({
-            'hh': self.hh_xwalk.index[self.full_hhidx],
-            'housing': self.housing_xwalk.index[self.full_choiceidx],
-            'uneq_choice': self.unequilibrated_choice_xwalk.index[self.full_uneqchoiceidx],
-            'probability': probs
-        })
+        return pd.DataFrame(
+            {
+                "hh": self.hh_xwalk.index[self.full_hhidx],
+                "housing": self.housing_xwalk.index[self.full_choiceidx],
+                "uneq_choice": self.unequilibrated_choice_xwalk.index[
+                    self.full_uneqchoiceidx
+                ],
+                "probability": probs,
+            }
+        )
 
-    def _mkt_shares (self):
-        probs = self._probabilities() * self.weights.loc[self.hh_xwalk.index].values[self.full_hhidx]
+    def _mkt_shares(self):
+        probs = (
+            self._probabilities()
+            * self.weights.loc[self.hh_xwalk.index].values[self.full_hhidx]
+        )
         return np.bincount(self.full_choiceidx, probs)
 
-    def mkt_shares (self):
+    def mkt_shares(self):
         return pd.Series(self._mkt_shares(), index=self.housing_xwalk.index)
 
-    def _uneq_mkt_shares (self):
-        probs = self._probabilities() * self.weights.loc[self.hh_xwalk.index].values[self.full_hhidx]
+    def _uneq_mkt_shares(self):
+        probs = (
+            self._probabilities()
+            * self.weights.loc[self.hh_xwalk.index].values[self.full_hhidx]
+        )
         return np.bincount(self.full_uneqchoiceidx, probs)
 
-    def uneq_mkt_shares (self):
-        return pd.Series(self._uneq_mkt_shares(), index=self.unequilibrated_choice_xwalk.index)
+    def uneq_mkt_shares(self):
+        return pd.Series(
+            self._uneq_mkt_shares(), index=self.unequilibrated_choice_xwalk.index
+        )
 
-    def savenew (self, basefile):
+    def savenew(self, basefile):
         save_load.save(basefile, self)
 
     @classmethod
-    def loadnew (cls, basefile):
+    def loadnew(cls, basefile):
         return save_load.load(basefile)
 
-    def to_text (self, fn=None):
+    def to_text(self, fn=None):
         "Save model results as text. If fn==None, return as string"
 
-        outstring = '''Equilibrium sorting model (Tra [2007] formulation, price in first stage as budget constraint)
+        outstring = """Equilibrium sorting model (Tra [2007] formulation, price in first stage as budget constraint)
 Model run initiated at {creation_time}
 Budget function {price_income_transformation}
 
@@ -865,25 +1082,27 @@ Second stage (OLS parameters):
 {second_stage_summary}
 
 Fit with EqSorMo version {version}, https://github.com/mattwigway/eqsormo
-        '''.format(
+        """.format(
             first_stage_summary=self.first_stage_fit.summary(),
             unequilibrated_ascs=pd.DataFrame(self.first_stage_uneq_ascs).to_string(),
-            equilibrated_ascs=pd.DataFrame(self.first_stage_ascs.describe()).to_string(),
+            equilibrated_ascs=pd.DataFrame(
+                self.first_stage_ascs.describe()
+            ).to_string(),
             second_stage_summary=self.second_stage_fit.summary(),
-            creation_time=self.creation_time.strftime('%Y-%m-%d %H:%M:%S %Z'),
+            creation_time=self.creation_time.strftime("%Y-%m-%d %H:%M:%S %Z"),
             price_income_transformation=self.price_income_transformation.name,
-            version=eqsormo.version
+            version=eqsormo.version,
         )
 
         if fn is not None:
-            with open(fn, 'w') as outfile:
+            with open(fn, "w") as outfile:
                 outfile.write(outstring)
         else:
             return outstring
 
     # don't pickle fullAlternatives
-    def __getstate__ (self):
-        return {k: v for k, v in self.__dict__.items() if k != 'fullAlternatives'}
+    def __getstate__(self):
+        return {k: v for k, v in self.__dict__.items() if k != "fullAlternatives"}
 
     @classmethod
     def from_pickle(cls, fn):
