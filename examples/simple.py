@@ -20,30 +20,40 @@ import pandas as pd
 import numpy as np
 from sys import path, argv
 import os.path
+
 path.append(os.path.dirname(os.path.dirname(os.path.abspath(argv[0]))))
 import eqsormo
+
 eqsormo.enable_logging()
 
-alt = pd.read_csv('data/alternatives.csv').set_index('choice')
-hh = pd.read_csv('data/hh.csv')
+alt = pd.read_csv("data/alternatives.csv").set_index("choice")
+hh = pd.read_csv("data/hh.csv")
 
-hh['hhincome'] /= 1000
-alt['nbhd_median_income'] /= 1000
+hh["hhincome"] /= 1000
+alt["nbhd_median_income"] /= 1000
 
 mod = eqsormo.SortingModel(
-    altHousing=alt[[]], # no structure specific attributes
-    altNeighborhood=alt[['nbhd_median_income', 'nbhd_mean_hhsize']],
-    altHedonic=alt[['nbhd_median_income', 'nbhd_mean_hhsize', 'singleFamily', 'nearby_median_income', 'nearby_mean_hhsize']],
+    altHousing=alt[[]],  # no structure specific attributes
+    altNeighborhood=alt[["nbhd_median_income", "nbhd_mean_hhsize"]],
+    altHedonic=alt[
+        [
+            "nbhd_median_income",
+            "nbhd_mean_hhsize",
+            "singleFamily",
+            "nearby_median_income",
+            "nearby_mean_hhsize",
+        ]
+    ],
     altPrice=alt.rentgrs,
-    hh = hh[['hhincome', 'college', 'numprec']],
+    hh=hh[["hhincome", "college", "numprec"]],
     hhChoice=hh.choice,
     interactions=[
-        ('hhincome', 'nbhd_median_income'),
-        ('numprec', 'nbhd_mean_hhsize'),
-        ('college', 'nbhd_median_income')
+        ("hhincome", "nbhd_median_income"),
+        ("numprec", "nbhd_mean_hhsize"),
+        ("college", "nbhd_median_income"),
     ],
     initialPriceCoef=-0.1,
-    sampleAlternatives=10
+    sampleAlternatives=10,
 )
 
 np.random.seed(2832)
