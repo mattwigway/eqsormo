@@ -1,5 +1,8 @@
 from setuptools import setup, find_packages
 
+with open("README.md", "r", encoding="utf-8") as fh:
+    long_description = fh.read()
+
 setup(
     name='eqsormo',
     version='0.3.10',
@@ -9,8 +12,12 @@ setup(
     author='Matthew Wigginton Conway',
     author_email='matt@indicatrix.org',
     description='Equilibrium sorting models in Python',
+    long_description=long_description,
     url='https://github.com/mattwigway/eqsormo',
     classifiers=[
-        'License :: OSI Approved :: Apache Software License'
+        'Programming Language :: Python :: 3',
+        'Operating System :: OS Independent',
+        'License :: OSI Approved :: Apache Software License',
+        'Development Status :: 3 - Alpha'
     ]
 )
