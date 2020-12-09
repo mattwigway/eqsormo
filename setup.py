@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name='eqsormo',
-    version='0.3.10p2',
+    version='0.3.10a2',
     packages=find_packages('src'),
     package_dir={'': 'src'},
     requirements=['statsmodels>=0.11', 'tqdm>=4.0', 'numba>=0.51', 'numpy>=1.0', 'pandas>=1.0', 'dill>=0.3', 'scipy>=1.5'],
