@@ -6,6 +6,8 @@ It currently supports discrete-choice-based sorting models, specifically of the 
 
 Eqsormo is currently alpha-stage software. Any results should be carefully evaluated, and issues reported to [the issue tracker](https://github.com/mattwigway/eqsormo/issues). API documentation [is available on readthedocs](https://eqsormo.readthedocs.io/en/latest/api.html#api); additional documentation is forthcoming.
 
+Eqsormo can be installed with `pip`: `pip install eqsormo`
+
 ## References
 
 Tra CI (2007) Evaluating the equilibrium welfare impacts of the 1990 Clean Air Act amendments in the Los Angeles area. Doctoral dissertation. University of Maryland, College Park, College Park, MD, USA. Available at: http://hdl.handle.net/1903/7236.
