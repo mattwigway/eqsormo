@@ -95,7 +95,7 @@ MMAP_FIELDS = [
     "hh_hsg_choice",
     "hh_unequilibrated_choice",
     "hh_xwalk",
-    "household_housing_attributes"
+    "household_housing_attributes",
 ]
 
 
