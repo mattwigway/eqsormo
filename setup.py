@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="eqsormo",
-    version="0.4.0a",
+    version="0.4.0b",
     packages=find_packages("src"),
     package_dir={"": "src"},
     install_requires=[
