@@ -29,9 +29,10 @@ class LazyNPZ(object):
     Lazy load Numpy arrays from an NPZ file.
     """
 
-    def __init__(self, file_or_filename):
+    def __init__(self, file_or_filename, allow_pickle=False):
         self.zipfile = ZipFile(file_or_filename)
         self.tempdir = tempfile.mkdtemp(prefix="npz")
+        self.allow_pickle = allow_pickle
 
     def get_members(self):
         # strip off .npy
@@ -47,13 +48,13 @@ class LazyNPZ(object):
     def _get_member(self, item):
         "get a member and return as bona-fide array"
         with self.zipfile.open(item + ".npy") as f:
-            return np.load(f)
+            return np.load(f, allow_pickle=self.allow_pickle)
 
     def _get_member_mmap(self, item):
         "get a member and return as an mmapped-array"
         # extract the npy file
         npypath = self.zipfile.extract(item + ".npy", path=self.tempdir)
-        return np.load(npypath, mmap_mode="r+")
+        return np.load(npypath, mmap_mode="r+", allow_pickle=self.allow_pickle)
 
     def __del__(self):
         self.zipfile.close()

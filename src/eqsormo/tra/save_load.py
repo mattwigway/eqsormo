@@ -20,6 +20,7 @@ import numpy as np
 import dill
 import logging
 import uuid
+from eqsormo.common.lazy_npz import LazyNPZ
 
 MODEL_VERSION = 0
 
@@ -81,6 +82,22 @@ FIELDS = [
     "weights",
 ]
 
+# fields that should be mmapped to save memory
+# these are large fields that we only use part of
+MMAP_FIELDS = [
+    "full_choiceidx",
+    "full_chosen",
+    "full_hh_hsgidx",
+    "full_hhidx",
+    "full_hsgchosen",
+    "full_uneqchoiceidx",
+    "full_uneqchosen",
+    "hh_hsg_choice",
+    "hh_unequilibrated_choice",
+    "hh_xwalk",
+    "household_housing_attributes"
+]
+
 
 def save(basefile, model):
     model_uuid = uuid.uuid4().hex
@@ -112,7 +129,8 @@ def load(basefile):
     with open(f"{basefile}.pickle", "rb") as inp:
         pkl = dill.load(inp)
 
-    npz = np.load(f"{basefile}.npz", allow_pickle=False)
+    npz = LazyNPZ(f"{basefile}.npz", allow_pickle=False)
+    npz_contents = npz.get_members()
 
     if (
         pkl["MODEL_VERSION"] != MODEL_VERSION
@@ -129,8 +147,8 @@ def load(basefile):
     def get(field):
         if field in pkl:
             return pkl[field]
-        elif field in npz:
-            return npz[field]
+        elif field in npz_contents:
+            return npz.get_member(field, mmap=field in MMAP_FIELDS)
         else:
             LOG.warn(f"Field {field} not found in stored model, assuming it was none")
             return None
