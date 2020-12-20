@@ -24,70 +24,71 @@ import tempfile
 import os
 
 
-def test_lazy_npz ():
+def test_lazy_npz():
     arr1 = np.arange(60)
-    arr2 = np.repeat(['a', 'b', 'c'], 20)
+    arr2 = np.repeat(["a", "b", "c"], 20)
 
-    fh, tmpfn = tempfile.mkstemp(suffix='.npz')
+    fh, tmpfn = tempfile.mkstemp(suffix=".npz")
     os.close(fh)
     np.savez(tmpfn, arr1=arr1, arr2=arr2)
 
     lazy = LazyNPZ(tmpfn)
 
-    assert set(lazy.get_members()) == {'arr1', 'arr2'}
-    
-    arr1_read = lazy.get_member('arr1', mmap=False)
+    assert set(lazy.get_members()) == {"arr1", "arr2"}
+
+    arr1_read = lazy.get_member("arr1", mmap=False)
     assert len(arr1_read) == len(arr1)
     assert arr1_read.dtype == arr1.dtype
     assert np.all(arr1_read == arr1)
 
-    arr2_read = lazy.get_member('arr2', mmap=False)
+    arr2_read = lazy.get_member("arr2", mmap=False)
     assert len(arr2_read) == len(arr2)
     assert arr2_read.dtype == arr2.dtype
     assert np.all(arr2_read == arr2)
 
     # and now with mmap
-    arr1_read = lazy.get_member('arr1', mmap=True)
+    arr1_read = lazy.get_member("arr1", mmap=True)
     assert len(arr1_read) == len(arr1)
     assert arr1_read.dtype == arr1.dtype
     assert np.all(arr1_read == arr1)
 
-    arr2_read = lazy.get_member('arr2', mmap=True)
+    arr2_read = lazy.get_member("arr2", mmap=True)
     assert len(arr2_read) == len(arr2)
     assert arr2_read.dtype == arr2.dtype
     assert np.all(arr2_read == arr2)
 
     os.remove(tmpfn)
 
-def test_lazy_npz_compressed ():
-    arr1 = np.arange(60)
-    arr2 = np.repeat(['a', 'b', 'c'], 20)
 
-    fh, tmpfn = tempfile.mkstemp(suffix='.npz')
+def test_lazy_npz_compressed():
+    arr1 = np.arange(60)
+    arr2 = np.repeat(["a", "b", "c"], 20)
+
+    fh, tmpfn = tempfile.mkstemp(suffix=".npz")
     os.close(fh)
     np.savez_compressed(tmpfn, arr1=arr1, arr2=arr2)
 
     lazy = LazyNPZ(tmpfn)
 
-    assert set(lazy.get_members()) == {'arr1', 'arr2'}
-    
-    arr1_read = lazy.get_member('arr1', mmap=False)
+    assert set(lazy.get_members()) == {"arr1", "arr2"}
+
+    arr1_read = lazy.get_member("arr1", mmap=False)
     assert len(arr1_read) == len(arr1)
     assert arr1_read.dtype == arr1.dtype
     assert np.all(arr1_read == arr1)
 
-    arr2_read = lazy.get_member('arr2', mmap=False)
+    arr2_read = lazy.get_member("arr2", mmap=False)
     assert len(arr2_read) == len(arr2)
     assert arr2_read.dtype == arr2.dtype
     assert np.all(arr2_read == arr2)
 
     # and now with mmap
-    arr1_read = lazy.get_member('arr1', mmap=True)
+    arr1_read = lazy.get_member("arr1", mmap=True)
     assert len(arr1_read) == len(arr1)
     assert arr1_read.dtype == arr1.dtype
     assert np.all(arr1_read == arr1)
 
-    arr2_read = lazy.get_member('arr2', mmap=True)
+    arr2_read = lazy.get_member("arr2", mmap=True)
     assert len(arr2_read) == len(arr2)
     assert arr2_read.dtype == arr2.dtype
     assert np.all(arr2_read == arr2)

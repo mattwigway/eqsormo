@@ -23,37 +23,39 @@ from zipfile import ZipFile
 import tempfile
 import os
 
+
 class LazyNPZ(object):
-    '''
+    """
     Lazy load Numpy arrays from an NPZ file.
-    '''
-    def __init__ (self, file_or_filename):
+    """
+
+    def __init__(self, file_or_filename):
         self.zipfile = ZipFile(file_or_filename)
-        self.tempdir = tempfile.mkdtemp(prefix='npz')
-    
-    def get_members (self):
+        self.tempdir = tempfile.mkdtemp(prefix="npz")
+
+    def get_members(self):
         # strip off .npy
         return [i[:-4] for i in self.zipfile.namelist()]
 
-    def get_member (self, item, mmap=False):
+    def get_member(self, item, mmap=False):
         "get a member, possibly loading it using mmap to save memory"
         if mmap:
             return self._get_member_mmap(item)
         else:
             return self._get_member(item)
 
-    def _get_member (self, item):
+    def _get_member(self, item):
         "get a member and return as bona-fide array"
-        with self.zipfile.open(item + '.npy') as f:
+        with self.zipfile.open(item + ".npy") as f:
             return np.load(f)
 
-    def _get_member_mmap (self, item):
+    def _get_member_mmap(self, item):
         "get a member and return as an mmapped-array"
         # extract the npy file
-        npypath = self.zipfile.extract(item + '.npy', path=self.tempdir)
-        return np.load(npypath, mmap_mode='r+')
+        npypath = self.zipfile.extract(item + ".npy", path=self.tempdir)
+        return np.load(npypath, mmap_mode="r+")
 
-    def __del__ (self):
+    def __del__(self):
         self.zipfile.close()
         # can't delete temporary directory here, may be in use by mmapped objects
         # TODO figure out how to delete temp directory when all mmapped arrays are closed
