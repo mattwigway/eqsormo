@@ -134,7 +134,7 @@ def load(basefile):
 
     if (
         pkl["MODEL_VERSION"] != MODEL_VERSION
-        or npz["MODEL_VERSION"][0] != MODEL_VERSION
+        or npz.get_member("MODEL_VERSION")[0] != MODEL_VERSION
     ):
         # TODO npz model version not saved correctly so not checked
         raise ValueError(
