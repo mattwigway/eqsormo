@@ -220,7 +220,7 @@ def compute_derivatives(
             probs *= alt_weights[choicemask]
         share_step = np.sum(probs)
         deriv[i] = (share_step - base_shares[i]) / price_step
-        assert deriv[i] < 0, f'derivative of price is nonnegative!'
+        assert deriv[i] < 0, f"derivative of price is nonnegative!"
         exp_utilities[choicemask] = base_exp_utilities[choicemask]
 
     return deriv

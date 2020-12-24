@@ -16,7 +16,7 @@ setup(
         "pandas",
         "dill",
         "scipy",
-        "dask"
+        "dask",
     ],
     author="Matthew Wigginton Conway",
     author_email="matt@indicatrix.org",
