@@ -81,6 +81,7 @@ class TraSortingModel(BaseSortingModel):
         max_chunk_bytes=2e9,
         est_first_stage_ses=True,
         seed=None,
+        price_file=None,
     ):
         """
         Initialize a Tra sorting model
@@ -155,10 +156,11 @@ class TraSortingModel(BaseSortingModel):
             significantly speed convergence and is recommended during model development.
         :type est_first_stage_ses: bool
 
-
-
         :param seed: seed for the random number generator used in sampling alternatives
         :type seed: int
+
+        :param price_file: where prices are recorded in sorting
+        :type price_file: str
         """
         self.housing_attributes = housing_attributes
         self.household_attributes = household_attributes
@@ -304,7 +306,7 @@ class TraSortingModel(BaseSortingModel):
         hh_hsgidx=None,
         price_income_params=None,
         materialize=True,
-        include_budget=True
+        include_budget=True,
     ):
         """
         Materialize the alternatives for hhidx, choiceidx, and uneqchoiceidx, and return them.
@@ -368,7 +370,9 @@ class TraSortingModel(BaseSortingModel):
 
             budget = np.full(len(hhidx), np.nan)
             budget[feasible_alts] = self.price_income_transformation.apply(
-                alt_income[feasible_alts], alt_price[feasible_alts], *price_income_params
+                alt_income[feasible_alts],
+                alt_price[feasible_alts],
+                *price_income_params,
             )
             assert not np.any(np.isnan(budget[feasible_alts]))  # should be no nans left
             alternatives.append(budget)
@@ -379,20 +383,28 @@ class TraSortingModel(BaseSortingModel):
         for hh_attr, hsg_attr in self.interactions:
             if hsg_attr in self.housing_attributes.columns:
                 # TODO lots of type conversion happening here. Could maybe refactor to do less.
-                alternatives.append(da.from_array(
-                    self.household_attributes[hh_attr].astype("float64").values[hhidx]
-                    * self.housing_attributes[hsg_attr]
-                    .astype("float64")
-                    .values[choiceidx]
-                ))
+                alternatives.append(
+                    da.from_array(
+                        self.household_attributes[hh_attr]
+                        .astype("float64")
+                        .values[hhidx]
+                        * self.housing_attributes[hsg_attr]
+                        .astype("float64")
+                        .values[choiceidx]
+                    )
+                )
             elif hsg_attr in self.endogenous_varnames:
                 endogenous_col = self.endogenous_varnames.index(hsg_attr)
-                alternatives.append(da.from_array(
-                    self.household_attributes[hh_attr].astype("float64").values[hhidx]
-                    * self.endogenous_variables[
-                        self.nbhd_for_choice[choiceidx], endogenous_col
-                    ]
-                ))
+                alternatives.append(
+                    da.from_array(
+                        self.household_attributes[hh_attr]
+                        .astype("float64")
+                        .values[hhidx]
+                        * self.endogenous_variables[
+                            self.nbhd_for_choice[choiceidx], endogenous_col
+                        ]
+                    )
+                )
             else:
                 raise KeyError(
                     f"{hsg_attr} is not a housing attribute, exogenous or endogenous"
@@ -404,9 +416,9 @@ class TraSortingModel(BaseSortingModel):
             vals = self.household_attributes[param].astype("float64").values[hhidx]
             for uneqchoice in range(1, len(self.unequilibrated_choice_xwalk)):
                 # fill all rows that are not for this unequilibrated choice with 0s
-                alternatives.append(da.from_array(np.choose(
-                    uneqchoiceidx == uneqchoice, [0, vals]
-                )))
+                alternatives.append(
+                    da.from_array(np.choose(uneqchoiceidx == uneqchoice, [0, vals]))
+                )
                 colnames.append(
                     f"{param}:uneq_choice_{self.unequilibrated_choice_xwalk[self.unequilibrated_choice_xwalk == uneqchoice].index[0]}"
                 )
@@ -415,16 +427,18 @@ class TraSortingModel(BaseSortingModel):
             vals = self.housing_attributes[param].astype("float64").values[choiceidx]
             for uneqchoice in range(1, len(self.unequilibrated_choice_xwalk)):
                 # fill all rows that are not for this unequilibrated choice with 0s
-                alternatives.append(da.from_array(np.choose(
-                    uneqchoiceidx == uneqchoice, [0, vals]
-                )))
+                alternatives.append(
+                    da.from_array(np.choose(uneqchoiceidx == uneqchoice, [0, vals]))
+                )
                 colnames.append(
                     f"{param}:uneq_choice_{self.unequilibrated_choice_xwalk[self.unequilibrated_choice_xwalk == uneqchoice].index[0]}"
                 )
 
         if self.household_housing_attributes is not None:
             for c in self.household_housing_attributes.columns:
-                alternatives.append(da.from_array(self.household_housing_attributes[c].to_numpy()))
+                alternatives.append(
+                    da.from_array(self.household_housing_attributes[c].to_numpy())
+                )
                 colnames.append(c)
 
         alternatives = da.stack(alternatives, axis=1)
@@ -675,7 +689,7 @@ class TraSortingModel(BaseSortingModel):
             self.full_hh_hsgidx,
             price_income_params=price_income_params,
             materialize=False,
-            include_budget=include_budget
+            include_budget=include_budget,
         )
 
         # add systematic utility and deterministic part of ASC based on market share
@@ -691,7 +705,9 @@ class TraSortingModel(BaseSortingModel):
             utility += self.first_stage_uneq_ascs.values[self.full_uneqchoiceidx]
 
         util_end_time = time.perf_counter()
-        LOG.info(f'Computing full utility took {human_time(util_end_time - util_start_time)}')
+        LOG.info(
+            f"Computing full utility took {human_time(util_end_time - util_start_time)}"
+        )
         return utility
 
     def fit_first_stage(self):
@@ -860,6 +876,8 @@ class TraSortingModel(BaseSortingModel):
 
         itr = 0
         startTimeClear = time.perf_counter()
+        all_prices = []
+
         while True:
             if itr > maxiter:
                 LOG.error(f"Prices FAILED TO CONVERGE after {itr} iterations")
@@ -892,7 +910,12 @@ class TraSortingModel(BaseSortingModel):
                 else None,
             )
 
-            assert np.all(new_prices > 0), 'some prices are 0 or less!'
+            all_prices.append(new_prices)
+
+            if self.price_file is not None:
+                np.save(self.price_file, np.array(all_prices), allow_pickle=False)
+
+            assert np.all(new_prices > 0), "some prices are 0 or less!"
 
             new_prices = pd.Series(new_prices, index=self.housing_xwalk.index)
             self.price = new_prices
