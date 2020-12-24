@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="eqsormo",
-    version="0.4.1a",
+    version="0.5.0",
     packages=find_packages("src"),
     package_dir={"": "src"},
     install_requires=[
@@ -16,6 +16,7 @@ setup(
         "pandas",
         "dill",
         "scipy",
+        "dask"
     ],
     author="Matthew Wigginton Conway",
     author_email="matt@indicatrix.org",
