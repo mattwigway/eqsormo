@@ -669,9 +669,9 @@ class TraSortingModel(BaseSortingModel):
         LOG.info(f"Alternatives dimensions: {human_shape(self.alternatives.shape)}")
         LOG.info(f"Alternatives use {human_bytes(self.alternatives.nbytes)} memory")
 
-    def full_utility(self, include_budget=True, include_ascs=True):
+    def full_utility(self, include_budget=True, include_ascs=True, materialize=True):
         """
-        Calculate full utilities (i.e. utilities for all alternatives, not just sampled ones).
+        Calculate full utilities (i.e. utilities for all alternatives, not just sampled ones). Returns a dask array.
         """
         util_start_time = time.perf_counter()
 
@@ -703,13 +703,14 @@ class TraSortingModel(BaseSortingModel):
         # TODO okay to just add log(weighted) here when ASCs were calc'd with log(unweighted)? I think so.
         utility = da.dot(alts, coefs) + lnsupply[self.full_choiceidx]
 
-        # compute now so that we're not holding on to big arrays in dask before calling compute
-        utility = utility.compute()
-
         if include_ascs:
             # do this in two steps to save memory
             utility += self.first_stage_ascs.values[self.full_choiceidx]
             utility += self.first_stage_uneq_ascs.values[self.full_uneqchoiceidx]
+
+        # compute now so that we're not holding on to big arrays in dask before calling compute
+        if materialize:
+            utility = utility.compute()
 
         util_end_time = time.perf_counter()
         LOG.info(
@@ -967,7 +968,7 @@ class TraSortingModel(BaseSortingModel):
                 self.endogenous_varnames = list(self.endogenous_variable_defs.keys())
 
             # Neighborhood for every element of weighted_probs
-            nbhdidx = self.nbhd_for_choice[self.full_choiceidx]
+            nbhdidx = da.from_array(self.nbhd_for_choice)[self.full_choiceidx]
 
             # reset endogenous variables. this creates a new array. if we instead cleared the old array, we would need
             # to create a copy in the if block below to ensure that the original values were preserved for comparison
@@ -980,9 +981,9 @@ class TraSortingModel(BaseSortingModel):
 
             # compute endogenous variables
             for neighborhood in range(np.max(self.nbhd_for_choice) + 1):
-                nbhdmask = nbhdidx == neighborhood
+                nbhdmask = (nbhdidx == neighborhood).compute()
                 # all probabilities for the neighborhood
-                nbhdweights = weighted_probs[nbhdmask]
+                nbhdweights = weighted_probs[nbhdmask].compute()
                 # how likely every household is to choose this neighborhood
                 hhweights = np.bincount(self.full_hhidx[nbhdmask], weights=nbhdweights)
                 # use the precomputed list to avoid order changing, as iteration order in python dicts is not guaranteed
@@ -1004,29 +1005,27 @@ class TraSortingModel(BaseSortingModel):
                 self.orig_endogenous_variables = self.endogenous_variables
 
     def _probabilities(self):
-        "Compute probabilities and return as numpy array, use .probabilities() for a Pandas data frame"
+        "Compute probabilities and return as dask array, use .probabilities() for a Pandas data frame"
         LOG.info("finding utility")
 
         if self.max_rent_to_income is None:
-            feasible_alts = np.full(True, len(self.full_hhidx))
+            feasible_alts = da.full(True, len(self.full_hhidx))
         else:
             feasible_alts = (
-                self.income.astype("float64").values[self.full_hhidx]
+                da.from_array(self.income.astype("float64").values)[self.full_hhidx]
                 * self.max_rent_to_income
-                > self.price.astype("float64").values[self.full_choiceidx]
+                > da.from_array(self.price.astype("float64").values)[self.full_choiceidx]
             )
 
-        exp_utility = np.exp(self.full_utility()[feasible_alts])
-        assert not np.any(np.isnan(exp_utility))
-        expsums = np.bincount(self.full_hhidx[feasible_alts], exp_utility)
-        probs = np.zeros_like(self.full_choiceidx, dtype="float64")
-        # alts not in choice set b/c infeasible are left with probability zero
-        probs[feasible_alts] = exp_utility / expsums[self.full_hhidx[feasible_alts]]
+        exp_utility = da.exp(self.full_utility(materialize=False)[feasible_alts])
+        assert not da.any(da.isnan(exp_utility))
+        expsums = da.bincount(self.full_hhidx[feasible_alts], exp_utility)
+        probs = da.choose(feasible_alts.astype('int8'), [np.zeros_like(self.full_choiceidx, dtype="float64"), exp_utility / expsums[self.full_hhidx[feasible_alts]])
         return probs
 
     def probabilities(self):
         "Return choice probabilities as Pandas dataframe, with columns for household ID, choice ID, and uneq choice ID"
-        probs = self._probabilities()
+        probs = self._probabilities().compute()
         return pd.DataFrame(
             {
                 "hh": self.hh_xwalk.index[self.full_hhidx],
