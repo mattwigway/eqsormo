@@ -1020,7 +1020,7 @@ class TraSortingModel(BaseSortingModel):
         exp_utility = da.exp(self.full_utility(materialize=False)[feasible_alts])
         assert not da.any(da.isnan(exp_utility))
         expsums = da.bincount(self.full_hhidx[feasible_alts], exp_utility)
-        probs = da.choose(feasible_alts.astype('int8'), [np.zeros_like(self.full_choiceidx, dtype="float64"), exp_utility / expsums[self.full_hhidx[feasible_alts]])
+        probs = da.choose(feasible_alts.astype('int8'), [np.zeros_like(self.full_choiceidx, dtype="float64"), exp_utility / expsums[self.full_hhidx[feasible_alts]]])
         return probs
 
     def probabilities(self):
