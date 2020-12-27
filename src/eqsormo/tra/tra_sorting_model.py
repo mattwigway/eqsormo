@@ -353,8 +353,14 @@ class TraSortingModel(BaseSortingModel):
 
         alternatives = []
 
+        current_col = 0
+        def add_to_colnames (col):
+            colnames.append(col)
+            LOG.info(f'Loading column {col} {current_col} / {ncols}')
+            current_col += 1
+
         # budget is first column, to make updates easier
-        colnames.append("budget")
+        add_to_colnames("budget")
 
         if include_budget:
             alt_income = self.income.astype("float64").values[hhidx]
@@ -381,6 +387,7 @@ class TraSortingModel(BaseSortingModel):
             alternatives.append(da.zeros_like(hhidx))
 
         for hh_attr, hsg_attr in self.interactions:
+            add_to_colnames(f"{hh_attr}:{hsg_attr}")
             if hsg_attr in self.housing_attributes.columns:
                 # TODO lots of type conversion happening here. Could maybe refactor to do less.
                 alternatives.append(
@@ -409,37 +416,37 @@ class TraSortingModel(BaseSortingModel):
                 raise KeyError(
                     f"{hsg_attr} is not a housing attribute, exogenous or endogenous"
                 )
-            colnames.append(f"{hh_attr}:{hsg_attr}")
 
         # now add the attributes for the unequilibrated choice
         for param in self.unequilibrated_hh_params:
             vals = self.household_attributes[param].astype("float64").values[hhidx]
             for uneqchoice in range(1, len(self.unequilibrated_choice_xwalk)):
+                add_to_colnames(
+                    f"{param}:uneq_choice_{self.unequilibrated_choice_xwalk[self.unequilibrated_choice_xwalk == uneqchoice].index[0]}"
+                )
                 # fill all rows that are not for this unequilibrated choice with 0s
                 alternatives.append(
                     da.from_array(np.choose(uneqchoiceidx == uneqchoice, [0, vals]))
                 )
-                colnames.append(
-                    f"{param}:uneq_choice_{self.unequilibrated_choice_xwalk[self.unequilibrated_choice_xwalk == uneqchoice].index[0]}"
-                )
+
 
         for param in self.unequilibrated_hsg_params:
             vals = self.housing_attributes[param].astype("float64").values[choiceidx]
             for uneqchoice in range(1, len(self.unequilibrated_choice_xwalk)):
+                add_to_colnames(
+                    f"{param}:uneq_choice_{self.unequilibrated_choice_xwalk[self.unequilibrated_choice_xwalk == uneqchoice].index[0]}"
+                )
                 # fill all rows that are not for this unequilibrated choice with 0s
                 alternatives.append(
                     da.from_array(np.choose(uneqchoiceidx == uneqchoice, [0, vals]))
                 )
-                colnames.append(
-                    f"{param}:uneq_choice_{self.unequilibrated_choice_xwalk[self.unequilibrated_choice_xwalk == uneqchoice].index[0]}"
-                )
 
         if self.household_housing_attributes is not None:
             for c in self.household_housing_attributes.columns:
+                add_to_colnames.append(c)
                 alternatives.append(
                     da.from_array(self.household_housing_attributes[c].to_numpy())
                 )
-                colnames.append(c)
 
         alternatives = da.stack(alternatives, axis=1)
 
