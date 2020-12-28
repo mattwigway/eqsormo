@@ -882,6 +882,7 @@ class TraSortingModel(BaseSortingModel):
 
         itr = 0
         startTimeClear = time.perf_counter()
+        all_prices = []
         while True:
             if itr > maxiter:
                 LOG.error(f"Prices FAILED TO CONVERGE after {itr} iterations")
@@ -915,6 +916,8 @@ class TraSortingModel(BaseSortingModel):
             )
 
             new_prices = pd.Series(new_prices, index=self.housing_xwalk.index)
+            all_prices.append(new_prices)
+            pd.DataFrame(all_prices).to_parquet("prices_per_iteration.parquet")
             self.price = new_prices
 
             if converged:
