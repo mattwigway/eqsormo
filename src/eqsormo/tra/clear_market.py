@@ -124,6 +124,7 @@ def clear_market_iter(
     budget[feasible_alts] = price_income_transformation.apply(
         alt_income[feasible_alts], alt_price[feasible_alts], *price_income_params
     )
+    price_step = 1e-8
     budget_step = np.full_like(alt_income, np.nan)
 
     if max_rent_to_income is None:
@@ -132,7 +133,7 @@ def clear_market_iter(
         feasible_alts_step = alt_income * max_rent_to_income > alt_price
     budget_step[feasible_alts] = price_income_transformation.apply(
         alt_income[feasible_alts_step],
-        alt_price[feasible_alts_step] + step,
+        alt_price[feasible_alts_step] + price_step,
         *price_income_params,
     )
 
@@ -154,7 +155,7 @@ def clear_market_iter(
         non_price_utilities,
         budget,
         budget_step,
-        step,
+        price_step,
         budget_coef,
         shares,
         max_rent_to_income,
@@ -220,7 +221,6 @@ def compute_derivatives(
             probs *= alt_weights[choicemask]
         share_step = np.sum(probs)
         deriv[i] = (share_step - base_shares[i]) / price_step
-        assert deriv[i] < 0, f'derivative of price is nonnegative!'
         exp_utilities[choicemask] = base_exp_utilities[choicemask]
 
     return deriv
@@ -253,11 +253,9 @@ def compute_shares(
     )
     full_utilities = non_price_utilities + budget_coef * budgets
     exp_utility = np.exp(full_utilities)
-    del full_utilities, budgets
     exp_utility[
         ~feasible_alts
     ] = 0  # will force choice probability to zero for infeasible alts
-    del feasible_alts
 
     if not np.all(np.isfinite(exp_utility)):
         raise FloatingPointError("Not all exp(utilities) are finite (scaling?)")
