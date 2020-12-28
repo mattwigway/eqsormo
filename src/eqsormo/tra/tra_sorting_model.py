@@ -326,7 +326,7 @@ class TraSortingModel(BaseSortingModel):
         if self.household_housing_attributes is not None:
             assert hh_hsgidx is not None and len(hhidx) == len(hh_hsgidx)
 
-        LOG.info(f"materializing {len(hhidx)} choices")
+        LOG.debug(f"materializing {len(hhidx)} choices")
 
         # first, create data for the interactions
         colnames = []
@@ -342,7 +342,7 @@ class TraSortingModel(BaseSortingModel):
         if self.household_housing_attributes is not None:
             ncols += len(self.household_housing_attributes.columns)
 
-        LOG.info(
+        LOG.debug(
             f"Allocating alternatives array of size {human_bytes(len(hhidx) * ncols * 8)}"
         )
         alternatives = np.zeros((len(hhidx), ncols))
@@ -432,7 +432,7 @@ class TraSortingModel(BaseSortingModel):
             current_col += len(self.household_housing_attributes.columns)
 
         total_time = time.perf_counter() - start_time
-        LOG.info(
+        LOG.debug(
             f"Materialized alternatives into {human_shape(alternatives.shape)} array using {human_bytes(alternatives.nbytes)} in {human_time(total_time)}"
         )
         self.alternatives_colnames = (
@@ -668,6 +668,14 @@ class TraSortingModel(BaseSortingModel):
             coefs = self.first_stage_fit.params.values
             price_income_params = np.zeros(0)
 
+        chunk_rows = int(
+            np.floor(self.max_chunk_bytes / len(self.alternatives_colnames) / 8)
+        )  # bytes per float64
+        nchunks = len(self.full_hhidx) // chunk_rows + 1
+        LOG.info(
+            f"Materializing full alternatives using {nchunks} chunks of {chunk_rows} rows each ({human_bytes(chunk_rows * len(self.alternatives_colnames) * 8)} each)"
+        )
+
         nthreads = multiprocessing.cpu_count()
 
         task_queue = queue.Queue()
@@ -681,7 +689,7 @@ class TraSortingModel(BaseSortingModel):
             while not stop_threads.is_set():
                 try:
                     # every 10 seconds restart the loop so we can check if thread has been signaled to stop
-                    chunk_start, chunk_end = task_queue.get(timeout=10)
+                    i, chunk_start, chunk_end = task_queue.get(timeout=10)
                 except queue.Empty:
                     continue
                 else:
@@ -708,6 +716,9 @@ class TraSortingModel(BaseSortingModel):
                     )
 
                     result_queue.put((chunk_start, chunk_end, util_chunk))
+                    LOG.info(
+                        f"Materialized chunk {i + 1} / {nchunks} and computed utility"
+                    )
                     task_queue.task_done()
 
         LOG.info(f"computing utility using {nthreads} threads")
@@ -731,16 +742,9 @@ class TraSortingModel(BaseSortingModel):
         for thread in threads:
             thread.start()
 
-        chunk_rows = int(
-            np.floor(self.max_chunk_bytes / len(self.alternatives_colnames) / 8)
-        )  # bytes per float64
-        LOG.info(
-            f"Materializing full alternatives using {len(self.full_hhidx) // chunk_rows + 1} chunks of {chunk_rows} rows each ({human_bytes(chunk_rows * len(self.alternatives_colnames) * 8)} each)"
-        )
-
-        for chunk_start in range(0, len(self.full_hhidx), chunk_rows):
+        for i, chunk_start in enumerate(range(0, len(self.full_hhidx), chunk_rows)):
             chunk_end = min(chunk_start + chunk_rows, len(self.full_hhidx))
-            task_queue.put((chunk_start, chunk_end))
+            task_queue.put((i, chunk_start, chunk_end))
 
         # wait for everything to finish
         task_queue.join()
