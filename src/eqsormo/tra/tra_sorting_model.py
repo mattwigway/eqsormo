@@ -353,9 +353,9 @@ class TraSortingModel(BaseSortingModel):
 
         alternatives = []
 
-        def add_to_colnames (col):
+        def add_to_colnames(col):
             colnames.append(col)
-            LOG.info(f'Loading column {col} {len(colnames)} / {ncols}')
+            LOG.info(f"Loading column {col} {len(colnames)} / {ncols}")
 
         # budget is first column, to make updates easier
         add_to_colnames("budget")
@@ -379,10 +379,12 @@ class TraSortingModel(BaseSortingModel):
                 *price_income_params,
             )
             assert not np.any(np.isnan(budget[feasible_alts]))  # should be no nans left
-            alternatives.append(budget)
+            alternatives.append(da.from_array(budget))
             del alt_income, alt_price, budget  # save memory
         else:
             alternatives.append(da.zeros_like(hhidx))
+
+        dask_endogenous = da.from_array(self.endogenous_variables)
 
         for hh_attr, hsg_attr in self.interactions:
             add_to_colnames(f"{hh_attr}:{hsg_attr}")
@@ -390,25 +392,21 @@ class TraSortingModel(BaseSortingModel):
                 # TODO lots of type conversion happening here. Could maybe refactor to do less.
                 alternatives.append(
                     da.from_array(
-                        self.household_attributes[hh_attr]
-                        .astype("float64")
-                        .values[hhidx]
-                        * self.housing_attributes[hsg_attr]
-                        .astype("float64")
-                        .values[choiceidx]
-                    )
+                        self.household_attributes[hh_attr].astype("float64").to_numpy()
+                    )[hhidx]
+                    * da.from_array(
+                        self.housing_attributes[hsg_attr].astype("float64").to_numpy()
+                    )[choiceidx]
                 )
             elif hsg_attr in self.endogenous_varnames:
                 endogenous_col = self.endogenous_varnames.index(hsg_attr)
                 alternatives.append(
                     da.from_array(
-                        self.household_attributes[hh_attr]
-                        .astype("float64")
-                        .values[hhidx]
-                        * self.endogenous_variables[
-                            self.nbhd_for_choice[choiceidx], endogenous_col
-                        ]
-                    )
+                        self.household_attributes[hh_attr].astype("float64").to_numpy()
+                    )[hhidx]
+                    * dask_endogenous[
+                        da.from_array(self.nbhd_for_choice)[choiceidx], endogenous_col
+                    ]
                 )
             else:
                 raise KeyError(
@@ -417,27 +415,26 @@ class TraSortingModel(BaseSortingModel):
 
         # now add the attributes for the unequilibrated choice
         for param in self.unequilibrated_hh_params:
-            vals = self.household_attributes[param].astype("float64").values[hhidx]
+            vals = da.from_array(
+                self.household_attributes[param].astype("float64").to_numpy()
+            )[hhidx]
             for uneqchoice in range(1, len(self.unequilibrated_choice_xwalk)):
                 add_to_colnames(
                     f"{param}:uneq_choice_{self.unequilibrated_choice_xwalk[self.unequilibrated_choice_xwalk == uneqchoice].index[0]}"
                 )
                 # fill all rows that are not for this unequilibrated choice with 0s
-                alternatives.append(
-                    da.from_array(np.choose(uneqchoiceidx == uneqchoice, [0, vals]))
-                )
-
+                alternatives.append(da.choose(uneqchoiceidx == uneqchoice, [0, vals]))
 
         for param in self.unequilibrated_hsg_params:
-            vals = self.housing_attributes[param].astype("float64").values[choiceidx]
+            vals = da.from_array(
+                self.housing_attributes[param].astype("float64").to_numpy()
+            )[choiceidx]
             for uneqchoice in range(1, len(self.unequilibrated_choice_xwalk)):
                 add_to_colnames(
                     f"{param}:uneq_choice_{self.unequilibrated_choice_xwalk[self.unequilibrated_choice_xwalk == uneqchoice].index[0]}"
                 )
                 # fill all rows that are not for this unequilibrated choice with 0s
-                alternatives.append(
-                    da.from_array(np.choose(uneqchoiceidx == uneqchoice, [0, vals]))
-                )
+                alternatives.append(da.choose(uneqchoiceidx == uneqchoice, [0, vals]))
 
         if self.household_housing_attributes is not None:
             for c in self.household_housing_attributes.columns:
@@ -674,7 +671,9 @@ class TraSortingModel(BaseSortingModel):
         util_start_time = time.perf_counter()
 
         # convert supply to an np array
-        lnsupply = da.from_array(np.log(self.weighted_supply.loc[self.housing_xwalk.index].values))
+        lnsupply = da.from_array(
+            np.log(self.weighted_supply.loc[self.housing_xwalk.index].values)
+        )
 
         if self.price_income_transformation.n_params > 0:
             coefs = self.first_stage_fit.params.values[
@@ -1012,13 +1011,21 @@ class TraSortingModel(BaseSortingModel):
             feasible_alts = (
                 da.from_array(self.income.astype("float64").values)[self.full_hhidx]
                 * self.max_rent_to_income
-                > da.from_array(self.price.astype("float64").values)[self.full_choiceidx]
+                > da.from_array(self.price.astype("float64").values)[
+                    self.full_choiceidx
+                ]
             )
 
         exp_utility = da.exp(self.full_utility(materialize=False)[feasible_alts])
         assert not da.any(da.isnan(exp_utility))
         expsums = da.bincount(self.full_hhidx[feasible_alts], exp_utility)
-        probs = da.choose(feasible_alts.astype('int8'), [np.zeros_like(self.full_choiceidx, dtype="float64"), exp_utility / expsums[self.full_hhidx[feasible_alts]]])
+        probs = da.choose(
+            feasible_alts.astype("int8"),
+            [
+                np.zeros_like(self.full_choiceidx, dtype="float64"),
+                exp_utility / expsums[self.full_hhidx[feasible_alts]],
+            ],
+        )
         return probs
 
     def probabilities(self):
