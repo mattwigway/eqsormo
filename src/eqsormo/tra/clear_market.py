@@ -19,6 +19,11 @@
 import numpy as np
 
 from logging import getLogger
+import tempfile
+import queue
+import threading
+import multiprocessing
+import os
 
 LOG = getLogger(__name__)
 
@@ -198,49 +203,118 @@ def compute_derivatives(
     base_exp_utilities = np.exp(non_price_utilities + budget_coef * budget)
     # exp utility of zero is out of choice set
     base_exp_utilities[~feasible_alts] = 0
-    exp_utilities = np.copy(base_exp_utilities)
-    step_exp_utilities = np.exp(non_price_utilities + budget_coef * budget_step)
-    step_exp_utilities[~feasible_alts_step] = 0
 
-    if not np.all(np.isfinite(exp_utilities)):
-        raise FloatingPointError(
-            f"Not all exp(utilities) are finite (scaling?)\n"
-            f"min non-price utility: {np.min(non_price_utilities)}\n"
-            f"max non-price utility: {np.max(non_price_utilities)}\n"
-            f"nans in non-price utility: {np.sum(np.isnan(non_price_utilities))}\n"
-            f"min budget: {np.min(budget[feasible_alts])}\n"
-            f"max budget: {np.max(budget[feasible_alts])}\n"
-            f"nans in budget: {np.sum(np.isnan(budget[feasible_alts]))}\n"
+    # memmap the base utilities so we can use copy-on-write
+    util_file = tempfile.mkstemp(prefix="eqsormo_mmap_", suffix=".bin")
+    try:
+        mm = np.memmap(
+            util_file, dtype="float64", mode="w+", shape=base_exp_utilities.shape
         )
+        mm[:] = base_exp_utilities[:]
+        mm.flush()
+        if not np.all(np.isfinite(base_exp_utilities)):
+            raise FloatingPointError(
+                f"Not all exp(utilities) are finite (scaling?)\n"
+                f"min non-price utility: {np.min(non_price_utilities)}\n"
+                f"max non-price utility: {np.max(non_price_utilities)}\n"
+                f"nans in non-price utility: {np.sum(np.isnan(non_price_utilities))}\n"
+                f"min budget: {np.min(budget[feasible_alts])}\n"
+                f"max budget: {np.max(budget[feasible_alts])}\n"
+                f"nans in budget: {np.sum(np.isnan(budget[feasible_alts]))}\n"
+            )
+        del base_exp_utilities
 
-    if not np.all(np.isfinite(step_exp_utilities)):
-        raise FloatingPointError(
-            "Not all exp(step_utilities) are finite (scaling)\n"
-            f"min non-price utility: {np.min(non_price_utilities)}\n"
-            f"max non-price utility: {np.max(non_price_utilities)}\n"
-            f"nans in non-price utility: {np.sum(np.isnan(non_price_utilities))}\n"
-            f"min budget: {np.min(budget_step[feasible_alts_step])}\n"
-            f"max budget: {np.max(budget_step[feasible_alts_step])}\n"
-            f"nans in budget: {np.sum(np.isnan(budget_step[feasible_alts_step]))}\n"
-        )
+        step_exp_utilities = np.exp(non_price_utilities + budget_coef * budget_step)
+        step_exp_utilities[~feasible_alts_step] = 0
 
-    # cache weights
-    if weights is not None:
-        alt_weights = weights[hhidx]
+        if not np.all(np.isfinite(step_exp_utilities)):
+            raise FloatingPointError(
+                "Not all exp(step_utilities) are finite (scaling)\n"
+                f"min non-price utility: {np.min(non_price_utilities)}\n"
+                f"max non-price utility: {np.max(non_price_utilities)}\n"
+                f"nans in non-price utility: {np.sum(np.isnan(non_price_utilities))}\n"
+                f"min budget: {np.min(budget_step[feasible_alts_step])}\n"
+                f"max budget: {np.max(budget_step[feasible_alts_step])}\n"
+                f"nans in budget: {np.sum(np.isnan(budget_step[feasible_alts_step]))}\n"
+            )
 
-    for i in range(len(price)):
-        choicemask = choiceidx == i
-        exp_utilities[choicemask] = step_exp_utilities[choicemask]
-        util_sums = np.bincount(hhidx, weights=exp_utilities)
-        probs = exp_utilities[choicemask] / util_sums[hhidx[choicemask]]
+        # cache weights
         if weights is not None:
-            probs *= alt_weights[choicemask]
-        share_step = np.sum(probs)
-        deriv[i] = (share_step - base_shares[i]) / price_step
-        assert deriv[i] < 0, f"derivative of price is nonnegative!"
-        exp_utilities[choicemask] = base_exp_utilities[choicemask]
+            alt_weights = weights[hhidx]
 
-    return deriv
+        task_queue = queue.Queue()
+        result_queue = queue.Queue()
+        stop_threads = threading.Event()
+
+        def worker():
+            while not stop_threads.is_set():
+                try:
+                    i = task_queue.get(timeout=10)
+                except queue.Empty:
+                    continue  # return to top of loop to check for stop_threads event
+                else:
+                    exp_utilities = np.memmap(
+                        util_file,
+                        dtype="float64",
+                        mode="c",
+                        shape=step_exp_utilities.shape,
+                    )
+                    # save memory by just saving indices, not full bool array
+                    # in the model in my disseration, there are ~1000 choices, so this will be 1/1000 of the indices
+                    # since an int is 32 bytes (or maybe 64 since numpy arrays can be big), and a bool I believe takes up
+                    # an entire byte, we come out ahead b/c 1/1000 * 32 < 8
+                    choicemask = np.nonzero(choiceidx == i)
+                    exp_utilities[choicemask] = step_exp_utilities[choicemask]
+                    util_sums = np.bincount(hhidx, weights=exp_utilities)
+                    probs = exp_utilities[choicemask] / util_sums[hhidx[choicemask]]
+                    if weights is not None:
+                        probs *= alt_weights[choicemask]
+                    share_step = np.sum(probs)
+                    del probs
+                    deriv = (share_step - base_shares[i]) / price_step
+                    result_queue.put((i, deriv))
+                    task_queue.task_done()
+
+        def consumer():
+            while not stop_threads.is_set():
+                try:
+                    i, val = result_queue.get(timeout=10)
+                except queue.Empty:
+                    continue
+                else:
+                    assert (
+                        val < 0
+                    ), f"derivative of price for alt {i} is non-negative: {val}"
+                    deriv[i] = val
+                    result_queue.task_done()
+
+        # might need something more complex here to account for the memory pressure of sorting. Even if you have
+        # 16 cores, you might not have enough memory to compute 16 derivatives at once.
+        nthreads = multiprocessing.cpu_count()
+        LOG.info(f"computing derivatives using {nthreads} threads")
+
+        # start threads
+        for i in range(nthreads):
+            threading.Thread(target=worker, daemon=False).start()
+
+        # consumer thread
+        threading.Thread(target=consumer, daemon=False).start()
+
+        # fill queue
+        for i in range(len(price)):
+            task_queue.put(i)
+
+        # await completion
+        task_queue.join()
+        result_queue.join()
+
+        # signal threads to shut down
+        stop_threads.set()
+
+        return deriv
+    finally:
+        # clean up
+        os.remove(util_file)
 
 
 def compute_shares(
