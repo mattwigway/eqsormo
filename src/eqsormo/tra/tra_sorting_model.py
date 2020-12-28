@@ -22,6 +22,9 @@ import statsmodels.api as sm
 import pandas as pd
 import numpy as np
 import datetime
+import multiprocessing
+import threading
+from queue import Queue
 
 from . import price_income
 from .clear_market import clear_market_iter
@@ -693,20 +696,56 @@ class TraSortingModel(BaseSortingModel):
             coefs = self.first_stage_fit.params.values
             price_income_params = np.zeros(0)
 
+        nthreads = multiprocessing.get_cpu_count()
+
+        task_queue = Queue(maxsize=ntrheads)
+        result_queue = Queue()
+
+        # worker function to run in threads
+        # numpy releases the GIL so running in threads works pretty well
+        def worker():
+            while True:
+                chunk_start, chunk_end, chunk_alts = task_queue.get()
+                if not include_budget:
+                    # zero out budget so it does not affect utility. chunk_alts has been materialized just for us, okay
+                    # to be destructive.
+                    chunk_alts[:, 0] = 0
+
+                # add systematic utility and deterministic part of ASC based on market share
+                # TODO okay to just add log(weighted) here when ASCs were calc'd with log(unweighted)? I think so.
+                util_chunk = (
+                    np.dot(chunk_alts, coefs)
+                    + lnsupply[self.full_choiceidx[chunk_start:chunk_end]]
+                )
+
+                result_queue.put((chunk_start, chunk_end, util_chunk))
+
+        LOG.info(f"computing utility using {nthreads} threads")
+
+        # Thread to put everything into the utility function
+        def consumer():
+            while True:
+                chunk_start, chunk_end, util_chunk = result_queue.get()
+                utility[chunk_start:chunk_end] = util_chunk
+
+        threads = [
+            threading.Thread(target=worker, daemon=False) for i in range(nthreads)
+        ]
+        threads.append(threading.Thread(target=consumer, daemon=False))
+        for thread in threads:
+            thread.start()
+
         for chunk_start, chunk_end, chunk_alts in self.chunked_full_alternatives(
             price_income_params
         ):
-            if not include_budget:
-                # zero out budget so it does not affect utility. chunk_alts has been materialized just for us, okay
-                # to be destructive.
-                chunk_alts[:, 0] = 0
+            task_queue.put((chunk_start, chunk_end, chunk_alts))
 
-            # add systematic utility and deterministic part of ASC based on market share
-            # TODO okay to just add log(weighted) here when ASCs were calc'd with log(unweighted)? I think so.
-            utility[chunk_start:chunk_end] = (
-                np.dot(chunk_alts, coefs)
-                + lnsupply[self.full_choiceidx[chunk_start:chunk_end]]
-            )
+        # wait for everything to finish
+        task_queue.join()
+        result_queue.join()
+
+        for thread in threads:
+            thread.stop()
 
         if include_ascs:
             utility += (
