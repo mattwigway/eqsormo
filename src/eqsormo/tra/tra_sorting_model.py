@@ -696,9 +696,9 @@ class TraSortingModel(BaseSortingModel):
             coefs = self.first_stage_fit.params.values
             price_income_params = np.zeros(0)
 
-        nthreads = multiprocessing.get_cpu_count()
+        nthreads = multiprocessing.cpu_count()
 
-        task_queue = Queue(maxsize=ntrheads)
+        task_queue = Queue(maxsize=nthreads)
         result_queue = Queue()
 
         # worker function to run in threads
