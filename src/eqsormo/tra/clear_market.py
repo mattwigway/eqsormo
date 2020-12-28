@@ -202,10 +202,27 @@ def compute_derivatives(
     step_exp_utilities = np.exp(non_price_utilities + budget_coef * budget_step)
     step_exp_utilities[~feasible_alts_step] = 0
 
-    if not np.all(np.isfinite(exp_utilities)) or not np.all(
-        np.isfinite(step_exp_utilities)
-    ):
-        raise FloatingPointError("Not all exp(utilities) are finite (scaling?)")
+    if not np.all(np.isfinite(exp_utilities)):
+        raise FloatingPointError(
+            f"Not all exp(utilities) are finite (scaling?)\n"
+            f"min non-price utility: {np.min(non_price_utilities)}\n"
+            f"max non-price utility: {np.max(non_price_utilities)}\n"
+            f"nans in non-price utility: {np.sum(np.isnan(non_price_utilities))}\n"
+            f"min budget: {np.min(budget)}\n"
+            f"max budget: {np.max(budget)}\n"
+            f"nans in budget: {np.sum(np.isnan(budget))}\n"
+        )
+
+    if not np.all(np.isfinite(step_exp_utilities)):
+        raise FloatingPointError(
+            "Not all exp(step_utilities) are finite (scaling)\n"
+            f"min non-price utility: {np.min(non_price_utilities)}\n"
+            f"max non-price utility: {np.max(non_price_utilities)}\n"
+            f"nans in non-price utility: {np.sum(np.isnan(non_price_utilities))}\n"
+            f"min budget: {np.min(budget_step)}\n"
+            f"max budget: {np.max(budget_step)}\n"
+            f"nans in budget: {np.sum(np.isnan(budget_step))}\n"
+        )
 
     # cache weights
     if weights is not None:
