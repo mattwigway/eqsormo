@@ -385,6 +385,13 @@ class TraSortingModel(BaseSortingModel):
         else:
             alternatives.append(dask.persist(da.zeros_like(hhidx)))
 
+        # hard to daskize some of the budget computations due to slice assignment, so daskize everything here
+        hhidx = dask.persist(da.from_array(hhidx))
+        choiceidx = dask.persist(da.from_array(choiceidx))
+        uneqchoiceidx = dask.persist(da.from_array(uneqchoiceidx))
+        if hh_hsgidx is not None:
+            hh_hsgidx = dask.persist(da.from_array(hh_hsgidx))
+
         dask_endogenous = da.from_array(self.endogenous_variables)
 
         for hh_attr, hsg_attr in self.interactions:
@@ -396,13 +403,13 @@ class TraSortingModel(BaseSortingModel):
                         da.from_array(
                             self.household_attributes[hh_attr]
                             .astype("float64")
-                            .to_numpy()
-                        )[hhidx]
+                            .to_numpy()[hhidx]
+                        )
                         * da.from_array(
                             self.housing_attributes[hsg_attr]
                             .astype("float64")
-                            .to_numpy()
-                        )[choiceidx]
+                            .to_numpy()[choiceidx]
+                        )
                     )
                 )
             elif hsg_attr in self.endogenous_varnames:
