@@ -181,7 +181,7 @@ def clear_market_iter(
     return price, False  # not converged yet (or we don't know anyhow)
 
 
-# @numba.jit(nopython=True) seems to slow things down but I may just not be letting it warm up
+# Numba does not help with this function
 def compute_derivatives(
     price,
     alt_income,

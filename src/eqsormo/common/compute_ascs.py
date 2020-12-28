@@ -20,7 +20,7 @@ from logging import getLogger
 LOG = getLogger(__name__)
 
 
-# @numba.jit(nopython=True)
+# Numba does not speed this up
 # TODO convergence_criterion doesn't do anything
 def compute_ascs(
     base_utilities,

@@ -11,7 +11,6 @@ setup(
     install_requires=[
         "statsmodels",
         "tqdm",
-        "numba",
         "numpy",
         "pandas",
         "dill",
