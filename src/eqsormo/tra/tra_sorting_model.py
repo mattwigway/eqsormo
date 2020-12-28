@@ -676,7 +676,7 @@ class TraSortingModel(BaseSortingModel):
         util_start_time = time.perf_counter()
 
         # convert supply to an np array
-        lnsupply = np.log(self.weighted_supply.loc[self.housing_xwalk.index].values)
+        lnsupply = da.from_array(np.log(self.weighted_supply.loc[self.housing_xwalk.index].values))
 
         if self.price_income_transformation.n_params > 0:
             coefs = self.first_stage_fit.params.values[
