@@ -208,9 +208,9 @@ def compute_derivatives(
             f"min non-price utility: {np.min(non_price_utilities)}\n"
             f"max non-price utility: {np.max(non_price_utilities)}\n"
             f"nans in non-price utility: {np.sum(np.isnan(non_price_utilities))}\n"
-            f"min budget: {np.min(budget)}\n"
-            f"max budget: {np.max(budget)}\n"
-            f"nans in budget: {np.sum(np.isnan(budget))}\n"
+            f"min budget: {np.min(budget[feasible_alts])}\n"
+            f"max budget: {np.max(budget[feasible_alts])}\n"
+            f"nans in budget: {np.sum(np.isnan(budget[feasible_alts]))}\n"
         )
 
     if not np.all(np.isfinite(step_exp_utilities)):
@@ -219,9 +219,9 @@ def compute_derivatives(
             f"min non-price utility: {np.min(non_price_utilities)}\n"
             f"max non-price utility: {np.max(non_price_utilities)}\n"
             f"nans in non-price utility: {np.sum(np.isnan(non_price_utilities))}\n"
-            f"min budget: {np.min(budget_step)}\n"
-            f"max budget: {np.max(budget_step)}\n"
-            f"nans in budget: {np.sum(np.isnan(budget_step))}\n"
+            f"min budget: {np.min(budget_step[feasible_alts_step])}\n"
+            f"max budget: {np.max(budget_step[feasible_alts_step])}\n"
+            f"nans in budget: {np.sum(np.isnan(budget_step[feasible_alts_step]))}\n"
         )
 
     # cache weights
