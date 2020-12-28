@@ -6,4 +6,4 @@ pandas>=1.0,<2.0
 dill>=0.3,<1.0
 pyarrow>=0.15,<1.0
 scipy>=1.5,<2.0
-dask[array]
+dask
