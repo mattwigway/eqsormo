@@ -963,6 +963,7 @@ class TraSortingModel(BaseSortingModel):
             assert not np.any(new_prices < 0), 'some prices are negative!'
 
             new_prices = pd.Series(new_prices, index=self.housing_xwalk.index)
+            LOG.info(f'Prices:\n{new_prices.describe()}')
             all_prices.append(new_prices)
             pd.DataFrame(all_prices).to_parquet("prices_per_iteration.parquet")
             self.price = new_prices

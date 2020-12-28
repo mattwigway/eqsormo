@@ -24,6 +24,7 @@ import queue
 import threading
 import multiprocessing
 import os
+import pandas as pd
 
 LOG = getLogger(__name__)
 
@@ -57,21 +58,13 @@ def clear_market_iter(
     alt_income = income[hhidx]
 
     if max_rent_to_income is not None:
-        origNExcluded = np.sum(alt_income * max_rent_to_income <= price[choiceidx])
-
-    prev_price = np.copy(price)
-
-    if max_rent_to_income is not None:
         # could cause oscillation if price keeps going above max income
         # Also, this will affect sorting equilibrium, because the price may effectively get fixed to the
         # 90th percentile income because it always moves off, and everything else equilibrate around it
         if np.any(price > np.max(income) * max_rent_to_income):
-            LOG.error(
+            raise ValueError(
                 "Some prices have exceeded max income - setting to be affordable to 90th"
                 + "percentile household to keep process going."
-            )
-            price[price > np.max(income) * max_rent_to_income] = (
-                np.percentile(income, 0.9) * max_rent_to_income
             )
 
     shares = compute_shares(
@@ -98,17 +91,6 @@ def clear_market_iter(
 
     # maxdiff = np.max(np.abs(shares - supply) / supply)
     maxdiff = np.max(np.abs(excess_demand / supply))
-
-    # probably will need to remove if using numba
-    maxpricediff = np.max(price - prev_price)
-    minpricediff = np.min(price - prev_price)
-    prev_price[:] = price
-    if max_rent_to_income is not None:
-        deltaNExcluded = (
-            np.sum(alt_income * max_rent_to_income <= price[choiceidx]) - origNExcluded
-        )
-    else:
-        deltaNExcluded = "n/a"
 
     # Use the approach defined in Tra (2007), page 108, eq. 7.7/7.7a, which is copied from Anas (1982)
     # first, compute derivative. Since the budget transformation is an arbitrary Python function,
@@ -171,12 +153,11 @@ def clear_market_iter(
     if not np.all(deriv < 0):
         raise ValueError("some derivatives of price are nonnegative")
 
+    LOG.info(f'Computed price derivatives:\n{pd.Series(deriv).describe()}')
+
     # this is 7.7a from Tra's dissertation
     price = price - (excess_demand / deriv)
-    LOG.info(
-        f"Max unit diff: {maxdiff}, max price diff: {maxpricediff}, "
-        + f"min price diff: {minpricediff}, additional excluded due to rent/income ration {deltaNExcluded}"
-    )
+    LOG.info(f"Max unit diff: {maxdiff}")
 
     return price, False  # not converged yet (or we don't know anyhow)
 
