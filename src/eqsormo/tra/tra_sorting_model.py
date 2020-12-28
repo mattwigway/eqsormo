@@ -672,11 +672,13 @@ class TraSortingModel(BaseSortingModel):
 
         task_queue = Queue()
         result_queue = Queue()
+        # once set, all threads should stop
+        stop_threads = threading.Event()
 
         # worker function to run in threads
         # numpy releases the GIL so running in threads works pretty well
         def worker():
-            while True:
+            while not stop_threads.is_set():
                 chunk_start, chunk_end = task_queue.get()
                 chunk_alts = self.materialize_alternatives(
                     self.full_hhidx[chunk_start:chunk_end],
@@ -707,7 +709,7 @@ class TraSortingModel(BaseSortingModel):
 
         # Thread to put everything into the utility function
         def consumer():
-            while True:
+            while not stop_threads.is_set():
                 chunk_start, chunk_end, util_chunk = result_queue.get()
                 utility[chunk_start:chunk_end] = util_chunk
                 result_queue.task_done()
@@ -734,8 +736,8 @@ class TraSortingModel(BaseSortingModel):
         task_queue.join()
         result_queue.join()
 
-        for thread in threads:
-            thread.stop()
+        # signal all threads to stop
+        stop_threads.set()
 
         if include_ascs:
             utility += (
