@@ -129,7 +129,7 @@ def clear_market_iter(
     if max_rent_to_income is None:
         feasible_alts_step = np.full_like(alt_price, True)
     else:
-        feasible_alts_step = alt_income * max_rent_to_income > alt_price
+        feasible_alts_step = alt_income * max_rent_to_income > alt_price + step
     budget_step[feasible_alts] = price_income_transformation.apply(
         alt_income[feasible_alts_step],
         alt_price[feasible_alts_step] + step,
