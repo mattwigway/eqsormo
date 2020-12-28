@@ -716,9 +716,10 @@ class TraSortingModel(BaseSortingModel):
                     )
 
                     result_queue.put((chunk_start, chunk_end, util_chunk))
-                    LOG.info(
-                        f"Materialized chunk {i + 1} / {nchunks} and computed utility"
-                    )
+                    if i % 10 == 9:
+                        LOG.info(
+                            f"Materialized chunk {i + 1} / {nchunks} and computed utility"
+                        )
                     task_queue.task_done()
 
         LOG.info(f"computing utility using {nthreads} threads")

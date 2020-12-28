@@ -267,7 +267,8 @@ def compute_derivatives(
                     assert (
                         val < 0
                     ), f"derivative of price for alt {i} is non-negative: {val}"
-                    LOG.info(f"computed derivative {i + 1} / {len(deriv)}")
+                    if i % 10 == 9:
+                        LOG.info(f"computed derivative {i + 1} / {len(deriv)}")
                     deriv[i] = val
                     result_queue.task_done()
 
