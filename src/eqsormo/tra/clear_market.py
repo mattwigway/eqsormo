@@ -205,7 +205,8 @@ def compute_derivatives(
     base_exp_utilities[~feasible_alts] = 0
 
     # memmap the base utilities so we can use copy-on-write
-    util_file = tempfile.mkstemp(prefix="eqsormo_mmap_", suffix=".bin")
+    fh, util_file = tempfile.mkstemp(prefix="eqsormo_mmap_", suffix=".bin")
+    os.close(fh)
     try:
         mm = np.memmap(
             util_file, dtype="float64", mode="w+", shape=base_exp_utilities.shape
