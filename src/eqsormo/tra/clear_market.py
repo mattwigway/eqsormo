@@ -85,20 +85,16 @@ def clear_market_iter(
         raise ValueError("Some shares are zero.")
 
     if np.allclose(shares, supply):
-        return price, False
+        return price, True
+
+    assert np.allclose(np.sum(shares), np.sum(supply)), 'shares and supply totals do not match'
 
     excess_demand = shares - supply
 
     # maxdiff = np.max(np.abs(shares - supply) / supply)
     maxdiff = np.max(np.abs(excess_demand / supply))
 
-    # Use the approach defined in Tra (2007), page 108, eq. 7.7/7.7a, which is copied from Anas (1982)
-    # first, compute derivative. Since the budget transformation is an arbitrary Python function,
-    # first compute its derivative.
-    # since the budgets are independent between houses and between choosers, this is a fast numpy
-    # vectorized operation. We need a loop to compute derivatives of budget. That can be done as a
-    # numpy vectorized operation. TODO this doesn't make sense - maybe using vectorize to mean diff
-    # things, i.e. actually vectorized vs np.vectorize?
+    # Use the approach defined in Tra (2007), page 108, eq. 7.7/7.7a, which is in turn from Anas (1982).
     alt_price = price[choiceidx]
 
     budget = np.zeros_like(alt_income)
@@ -117,6 +113,7 @@ def clear_market_iter(
         feasible_alts_step = np.full_like(alt_price, True)
     else:
         feasible_alts_step = alt_income * max_rent_to_income > alt_price + step
+
     budget_step[feasible_alts_step] = price_income_transformation.apply(
         alt_income[feasible_alts_step],
         alt_price[feasible_alts_step] + step,
@@ -128,11 +125,6 @@ def clear_market_iter(
     # Appears to be causing convergence problems.
     # excess_demand[0] = 0
 
-    # NB derivatives are ill-behaved at the boundary where a choice enters a household's choice set due to
-    # price dropping below their income. We assume that what is in each household's choice set is
-    # nonchanging for the purpose of calculating derivatives.
-    # Nope, that won't work.
-    # TODO is the above comment correct? how is this handled now?
     deriv = compute_derivatives(
         price,
         alt_income,
