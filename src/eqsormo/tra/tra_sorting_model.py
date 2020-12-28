@@ -701,6 +701,7 @@ class TraSortingModel(BaseSortingModel):
                 )
 
                 result_queue.put((chunk_start, chunk_end, util_chunk))
+                task_queue.task_done()
 
         LOG.info(f"computing utility using {nthreads} threads")
 
@@ -709,6 +710,7 @@ class TraSortingModel(BaseSortingModel):
             while True:
                 chunk_start, chunk_end, util_chunk = result_queue.get()
                 utility[chunk_start:chunk_end] = util_chunk
+                result_queue.task_done()
 
         threads = [
             threading.Thread(target=worker, daemon=False) for i in range(nthreads)
