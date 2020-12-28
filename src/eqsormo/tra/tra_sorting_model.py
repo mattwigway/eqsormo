@@ -670,7 +670,7 @@ class TraSortingModel(BaseSortingModel):
 
         nthreads = multiprocessing.cpu_count()
 
-        task_queue = Queue(maxsize=nthreads)
+        task_queue = Queue()
         result_queue = Queue()
 
         # worker function to run in threads
@@ -723,9 +723,6 @@ class TraSortingModel(BaseSortingModel):
         LOG.info(
             f"Materializing full alternatives using {len(self.full_hhidx) // chunk_rows + 1} chunks of {chunk_rows} rows each ({human_bytes(chunk_rows * len(self.alternatives_colnames) * 8)} each)"
         )
-
-        nthreads = multiprocessing.cpu_count()
-        task_queue = Queue(maxsize=nthreads)
 
         for chunk_start in range(0, len(self.full_hhidx), chunk_rows):
             chunk_end = min(chunk_start + chunk_rows, len(self.full_hhidx))
