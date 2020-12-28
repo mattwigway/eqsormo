@@ -360,7 +360,7 @@ class TraSortingModel(BaseSortingModel):
         else:
             feasible_alts = np.full(len(alt_income), True)
 
-        LOG.info(f"{np.sum(feasible_alts)} options appear in choice sets")
+        LOG.debug(f"{np.sum(feasible_alts)} options appear in choice sets")
 
         budget = np.full(len(hhidx), np.nan)
         budget[feasible_alts] = self.price_income_transformation.apply(
