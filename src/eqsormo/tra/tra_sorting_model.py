@@ -22,6 +22,7 @@ import statsmodels.api as sm
 import pandas as pd
 import numpy as np
 import datetime
+import dask
 import dask.array as da
 
 from . import price_income
@@ -379,10 +380,10 @@ class TraSortingModel(BaseSortingModel):
                 *price_income_params,
             )
             assert not np.any(np.isnan(budget[feasible_alts]))  # should be no nans left
-            alternatives.append(da.from_array(budget))
+            alternatives.append(dask.persist(da.from_array(budget)))
             del alt_income, alt_price, budget  # save memory
         else:
-            alternatives.append(da.zeros_like(hhidx))
+            alternatives.append(dask.persist(da.zeros_like(hhidx)))
 
         dask_endogenous = da.from_array(self.endogenous_variables)
 
@@ -391,22 +392,33 @@ class TraSortingModel(BaseSortingModel):
             if hsg_attr in self.housing_attributes.columns:
                 # TODO lots of type conversion happening here. Could maybe refactor to do less.
                 alternatives.append(
-                    da.from_array(
-                        self.household_attributes[hh_attr].astype("float64").to_numpy()
-                    )[hhidx]
-                    * da.from_array(
-                        self.housing_attributes[hsg_attr].astype("float64").to_numpy()
-                    )[choiceidx]
+                    dask.persist(
+                        da.from_array(
+                            self.household_attributes[hh_attr]
+                            .astype("float64")
+                            .to_numpy()
+                        )[hhidx]
+                        * da.from_array(
+                            self.housing_attributes[hsg_attr]
+                            .astype("float64")
+                            .to_numpy()
+                        )[choiceidx]
+                    )
                 )
             elif hsg_attr in self.endogenous_varnames:
                 endogenous_col = self.endogenous_varnames.index(hsg_attr)
                 alternatives.append(
-                    da.from_array(
-                        self.household_attributes[hh_attr].astype("float64").to_numpy()
-                    )[hhidx]
-                    * dask_endogenous[
-                        da.from_array(self.nbhd_for_choice)[choiceidx], endogenous_col
-                    ]
+                    dask.persist(
+                        da.from_array(
+                            self.household_attributes[hh_attr]
+                            .astype("float64")
+                            .to_numpy()
+                        )[hhidx]
+                        * dask_endogenous[
+                            da.from_array(self.nbhd_for_choice)[choiceidx],
+                            endogenous_col,
+                        ]
+                    )
                 )
             else:
                 raise KeyError(
@@ -440,7 +452,9 @@ class TraSortingModel(BaseSortingModel):
             for c in self.household_housing_attributes.columns:
                 add_to_colnames.append(c)
                 alternatives.append(
-                    da.from_array(self.household_housing_attributes[c].to_numpy())
+                    dask.persist(
+                        da.from_array(self.household_housing_attributes[c].to_numpy())
+                    )
                 )
 
         alternatives = da.stack(alternatives, axis=1)
