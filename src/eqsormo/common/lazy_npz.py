@@ -53,7 +53,7 @@ class LazyNPZ(object):
     def _get_member_mmap(self, item):
         "get a member and return as an mmapped-array"
         # extract the npy file
-        npypath = self.zipfile.extract(uuid.uuid4().hex + ".npy", path=self.tempdir)
+        npypath = self.zipfile.extract(item + ".npy", path=os.path.join(self.tempdir, uuid.uuid4().hex + ".npy")
         return np.load(npypath, mmap_mode="r+", allow_pickle=self.allow_pickle)
 
     def __del__(self):
