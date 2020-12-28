@@ -647,34 +647,6 @@ class TraSortingModel(BaseSortingModel):
         LOG.info(f"Alternatives dimensions: {human_shape(self.alternatives.shape)}")
         LOG.info(f"Alternatives use {human_bytes(self.alternatives.nbytes)} memory")
 
-    def chunked_full_alternatives(self, price_income_params):
-        """
-        With large sorting models it is not possible to materialize the entire dataset all at once, as we will quickly run out of memory.
-        This function realizes the full alternatives in chunks and yields tuples of (chunk_start, chunk_end, chunk_alts).
-
-        This is useful to calculate e.g. a utility, which can be calculated in chunks by decomposing the matrix multiplication and then concatenating.
-        """
-
-        chunk_rows = int(
-            np.floor(self.max_chunk_bytes / len(self.alternatives_colnames) / 8)
-        )  # bytes per float64
-        LOG.info(
-            f"Materializing full alternatives using {len(self.full_hhidx) // chunk_rows + 1} chunks of {chunk_rows} rows each ({human_bytes(chunk_rows * len(self.alternatives_colnames) * 8)} each)"
-        )
-
-        for chunk_start in range(0, len(self.full_hhidx), chunk_rows):
-            chunk_end = min(chunk_start + chunk_rows, len(self.full_hhidx))
-            chunk_alts = self.materialize_alternatives(
-                self.full_hhidx[chunk_start:chunk_end],
-                self.full_choiceidx[chunk_start:chunk_end],
-                self.full_uneqchoiceidx[chunk_start:chunk_end],
-                self.full_hh_hsgidx[chunk_start:chunk_end]
-                if self.household_housing_attributes is not None
-                else None,
-                price_income_params=price_income_params,
-            )
-            yield chunk_start, chunk_end, chunk_alts
-
     def full_utility(self, include_budget=True, include_ascs=True):
         """
         Calculate full utilities (i.e. utilities for all alternatives, not just sampled ones). To remain within available memory,
@@ -705,7 +677,17 @@ class TraSortingModel(BaseSortingModel):
         # numpy releases the GIL so running in threads works pretty well
         def worker():
             while True:
-                chunk_start, chunk_end, chunk_alts = task_queue.get()
+                chunk_start, chunk_end = task_queue.get()
+                chunk_alts = self.materialize_alternatives(
+                    self.full_hhidx[chunk_start:chunk_end],
+                    self.full_choiceidx[chunk_start:chunk_end],
+                    self.full_uneqchoiceidx[chunk_start:chunk_end],
+                    self.full_hh_hsgidx[chunk_start:chunk_end]
+                    if self.household_housing_attributes is not None
+                    else None,
+                    price_income_params=price_income_params,
+                )
+
                 if not include_budget:
                     # zero out budget so it does not affect utility. chunk_alts has been materialized just for us, okay
                     # to be destructive.
@@ -735,10 +717,19 @@ class TraSortingModel(BaseSortingModel):
         for thread in threads:
             thread.start()
 
-        for chunk_start, chunk_end, chunk_alts in self.chunked_full_alternatives(
-            price_income_params
-        ):
-            task_queue.put((chunk_start, chunk_end, chunk_alts))
+        chunk_rows = int(
+            np.floor(self.max_chunk_bytes / len(self.alternatives_colnames) / 8)
+        )  # bytes per float64
+        LOG.info(
+            f"Materializing full alternatives using {len(self.full_hhidx) // chunk_rows + 1} chunks of {chunk_rows} rows each ({human_bytes(chunk_rows * len(self.alternatives_colnames) * 8)} each)"
+        )
+
+        nthreads = multiprocessing.cpu_count()
+        task_queue = Queue(maxsize=nthreads)
+
+        for chunk_start in range(0, len(self.full_hhidx), chunk_rows):
+            chunk_end = min(chunk_start + chunk_rows, len(self.full_hhidx))
+            task_queue.put((chunk_start, chunk_end))
 
         # wait for everything to finish
         task_queue.join()
