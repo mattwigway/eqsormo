@@ -84,19 +84,19 @@ FIELDS = [
 
 # fields that should be mmapped to save memory
 # these are large fields that we only use part of
-MMAP_FIELDS = [
-    "full_choiceidx",
-    "full_chosen",
-    "full_hh_hsgidx",
-    "full_hhidx",
-    "full_hsgchosen",
-    "full_uneqchoiceidx",
-    "full_uneqchosen",
-    "hh_hsg_choice",
-    "hh_unequilibrated_choice",
-    "hh_xwalk",
-    "household_housing_attributes",
-]
+MMAP_FIELDS = []
+#     "full_choiceidx",
+#     "full_chosen",
+#     "full_hh_hsgidx",
+#     "full_hhidx",
+#     "full_hsgchosen",
+#     "full_uneqchoiceidx",
+#     "full_uneqchosen",
+#     "hh_hsg_choice",
+#     "hh_unequilibrated_choice",
+#     "hh_xwalk",
+#     "household_housing_attributes",
+# ]
 
 
 def save(basefile, model):
