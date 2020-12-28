@@ -22,7 +22,6 @@ import statsmodels.api as sm
 import pandas as pd
 import numpy as np
 import datetime
-import dask.array as da
 
 from . import price_income
 from .clear_market import clear_market_iter
@@ -297,14 +296,7 @@ class TraSortingModel(BaseSortingModel):
             raise ValueError("Some validation checks failed (see log messages)")
 
     def materialize_alternatives(
-        self,
-        hhidx,
-        choiceidx,
-        uneqchoiceidx,
-        hh_hsgidx=None,
-        price_income_params=None,
-        materialize=True,
-        include_budget=True
+        self, hhidx, choiceidx, uneqchoiceidx, hh_hsgidx=None, price_income_params=None
     ):
         """
         Materialize the alternatives for hhidx, choiceidx, and uneqchoiceidx, and return them.
@@ -319,8 +311,6 @@ class TraSortingModel(BaseSortingModel):
 
         hh_hsgidx is the integer indices in household_housing_attributes for the selected household/housing combinations, same length
         as hhidx etc.
-
-        If materialize is False, return a dask array rather than a materialized Numpy array
         """
         start_time = time.perf_counter()
 
@@ -349,101 +339,107 @@ class TraSortingModel(BaseSortingModel):
         if self.household_housing_attributes is not None:
             ncols += len(self.household_housing_attributes.columns)
 
-        alternatives = []
+        LOG.info(
+            f"Allocating alternatives array of size {human_bytes(len(hhidx) * ncols * 8)}"
+        )
+        alternatives = np.zeros((len(hhidx), ncols))
 
         # budget is first column, to make updates easier
+        current_col = 0
         colnames.append("budget")
+        alt_income = self.income.astype("float64").values[hhidx]
+        alt_price = self.price.astype("float64").values[choiceidx]
 
-        if include_budget:
-            alt_income = self.income.astype("float64").values[hhidx]
-            alt_price = self.price.astype("float64").values[choiceidx]
-            # don't calc buget for options not in choice set
-            # it may throw an error (e.g. log(neg) for logdiff)
-            if self.max_rent_to_income is not None:
-                feasible_alts = alt_income * self.max_rent_to_income > alt_price
-            else:
-                feasible_alts = np.full(len(alt_income), True)
-
-            LOG.info(f"{np.sum(feasible_alts)} options appear in choice sets")
-
-            budget = np.full(len(hhidx), np.nan)
-            budget[feasible_alts] = self.price_income_transformation.apply(
-                alt_income[feasible_alts], alt_price[feasible_alts], *price_income_params
-            )
-            assert not np.any(np.isnan(budget[feasible_alts]))  # should be no nans left
-            alternatives.append(budget)
-            del alt_income, alt_price, budget  # save memory
+        # don't calc buget for options not in choice set
+        # it may throw an error (e.g. log(neg) for logdiff)
+        if self.max_rent_to_income is not None:
+            feasible_alts = alt_income * self.max_rent_to_income > alt_price
         else:
-            alternatives.append(da.zeros_like(hhidx))
+            feasible_alts = np.full(len(alt_income), True)
+
+        LOG.info(f"{np.sum(feasible_alts)} options appear in choice sets")
+
+        budget = np.full(len(hhidx), np.nan)
+        budget[feasible_alts] = self.price_income_transformation.apply(
+            alt_income[feasible_alts], alt_price[feasible_alts], *price_income_params
+        )
+        assert not np.any(np.isnan(budget[feasible_alts]))  # should be no nans left
+        alternatives[:, current_col] = budget
+        current_col += 1
+        del alt_income, alt_price, budget  # save memory
 
         for hh_attr, hsg_attr in self.interactions:
             if hsg_attr in self.housing_attributes.columns:
                 # TODO lots of type conversion happening here. Could maybe refactor to do less.
-                alternatives.append(da.from_array(
+                alternatives[:, current_col] = (
                     self.household_attributes[hh_attr].astype("float64").values[hhidx]
                     * self.housing_attributes[hsg_attr]
                     .astype("float64")
                     .values[choiceidx]
-                ))
+                )
             elif hsg_attr in self.endogenous_varnames:
                 endogenous_col = self.endogenous_varnames.index(hsg_attr)
-                alternatives.append(da.from_array(
+                alternatives[:, current_col] = (
                     self.household_attributes[hh_attr].astype("float64").values[hhidx]
                     * self.endogenous_variables[
                         self.nbhd_for_choice[choiceidx], endogenous_col
                     ]
-                ))
+                )
             else:
                 raise KeyError(
                     f"{hsg_attr} is not a housing attribute, exogenous or endogenous"
                 )
             colnames.append(f"{hh_attr}:{hsg_attr}")
+            current_col += 1
 
         # now add the attributes for the unequilibrated choice
         for param in self.unequilibrated_hh_params:
             vals = self.household_attributes[param].astype("float64").values[hhidx]
             for uneqchoice in range(1, len(self.unequilibrated_choice_xwalk)):
                 # fill all rows that are not for this unequilibrated choice with 0s
-                alternatives.append(da.from_array(np.choose(
+                alternatives[:, current_col] = np.choose(
                     uneqchoiceidx == uneqchoice, [0, vals]
-                )))
+                )
                 colnames.append(
                     f"{param}:uneq_choice_{self.unequilibrated_choice_xwalk[self.unequilibrated_choice_xwalk == uneqchoice].index[0]}"
                 )
+                current_col += 1
 
         for param in self.unequilibrated_hsg_params:
             vals = self.housing_attributes[param].astype("float64").values[choiceidx]
             for uneqchoice in range(1, len(self.unequilibrated_choice_xwalk)):
                 # fill all rows that are not for this unequilibrated choice with 0s
-                alternatives.append(da.from_array(np.choose(
+                alternatives[:, current_col] = np.choose(
                     uneqchoiceidx == uneqchoice, [0, vals]
-                )))
+                )
                 colnames.append(
                     f"{param}:uneq_choice_{self.unequilibrated_choice_xwalk[self.unequilibrated_choice_xwalk == uneqchoice].index[0]}"
                 )
+                current_col += 1
 
         if self.household_housing_attributes is not None:
             for c in self.household_housing_attributes.columns:
-                alternatives.append(da.from_array(self.household_housing_attributes[c].to_numpy()))
                 colnames.append(c)
 
-        alternatives = da.stack(alternatives, axis=1)
-
-        if self.alternatives_stds is None:
-            self.alternatives_stds = da.std(alternatives, axis=0)
-
-        alternatives /= self.alternatives_stds
-
-        if materialize:
-            alternatives = alternatives.compute()
+            alternatives[
+                :,
+                current_col : current_col
+                + len(self.household_housing_attributes.columns),
+            ] = self.household_housing_attributes.values[hh_hsgidx, :]
+            current_col += len(self.household_housing_attributes.columns)
 
         total_time = time.perf_counter() - start_time
         LOG.info(
-            f"Materialized alternatives into {human_shape(alternatives.shape)} array in {human_time(total_time)}"
+            f"Materialized alternatives into {human_shape(alternatives.shape)} array using {human_bytes(alternatives.nbytes)} in {human_time(total_time)}"
         )
         self.alternatives_colnames = (
             colnames  # hacky to set this every time but it never changes
         )
+
+        if self.alternatives_stds is None:
+            self.alternatives_stds = np.std(alternatives, axis=0)
+
+        alternatives /= self.alternatives_stds
 
         return alternatives
 
@@ -648,12 +644,41 @@ class TraSortingModel(BaseSortingModel):
         LOG.info(f"Alternatives dimensions: {human_shape(self.alternatives.shape)}")
         LOG.info(f"Alternatives use {human_bytes(self.alternatives.nbytes)} memory")
 
+    def chunked_full_alternatives(self, price_income_params):
+        """
+        With large sorting models it is not possible to materialize the entire dataset all at once, as we will quickly run out of memory.
+        This function realizes the full alternatives in chunks and yields tuples of (chunk_start, chunk_end, chunk_alts).
+
+        This is useful to calculate e.g. a utility, which can be calculated in chunks by decomposing the matrix multiplication and then concatenating.
+        """
+
+        chunk_rows = int(
+            np.floor(self.max_chunk_bytes / len(self.alternatives_colnames) / 8)
+        )  # bytes per float64
+        LOG.info(
+            f"Materializing full alternatives using {len(self.full_hhidx) // chunk_rows + 1} chunks of {chunk_rows} rows each ({human_bytes(chunk_rows * len(self.alternatives_colnames) * 8)} each)"
+        )
+
+        for chunk_start in range(0, len(self.full_hhidx), chunk_rows):
+            chunk_end = min(chunk_start + chunk_rows, len(self.full_hhidx))
+            chunk_alts = self.materialize_alternatives(
+                self.full_hhidx[chunk_start:chunk_end],
+                self.full_choiceidx[chunk_start:chunk_end],
+                self.full_uneqchoiceidx[chunk_start:chunk_end],
+                self.full_hh_hsgidx[chunk_start:chunk_end]
+                if self.household_housing_attributes is not None
+                else None,
+                price_income_params=price_income_params,
+            )
+            yield chunk_start, chunk_end, chunk_alts
+
     def full_utility(self, include_budget=True, include_ascs=True):
         """
-        Calculate full utilities (i.e. utilities for all alternatives, not just sampled ones).
+        Calculate full utilities (i.e. utilities for all alternatives, not just sampled ones). To remain within available memory,
+        this in chunks.
         """
-        util_start_time = time.perf_counter()
 
+        utility = np.full_like(self.full_choiceidx, np.nan, dtype="float64")
         # convert supply to an np array
         lnsupply = np.log(self.weighted_supply.loc[self.housing_xwalk.index].values)
 
@@ -668,30 +693,27 @@ class TraSortingModel(BaseSortingModel):
             coefs = self.first_stage_fit.params.values
             price_income_params = np.zeros(0)
 
-        alts = self.materialize_alternatives(
-            self.full_hhidx,
-            self.full_choiceidx,
-            self.full_uneqchoiceidx,
-            self.full_hh_hsgidx,
-            price_income_params=price_income_params,
-            materialize=False,
-            include_budget=include_budget
-        )
+        for chunk_start, chunk_end, chunk_alts in self.chunked_full_alternatives(
+            price_income_params
+        ):
+            if not include_budget:
+                # zero out budget so it does not affect utility. chunk_alts has been materialized just for us, okay
+                # to be destructive.
+                chunk_alts[:, 0] = 0
 
-        # add systematic utility and deterministic part of ASC based on market share
-        # TODO okay to just add log(weighted) here when ASCs were calc'd with log(unweighted)? I think so.
-        utility = da.dot(alts, coefs) + lnsupply[self.full_choiceidx]
-
-        # compute now so that we're not holding on to big arrays in dask before calling compute
-        utility = utility.compute()
+            # add systematic utility and deterministic part of ASC based on market share
+            # TODO okay to just add log(weighted) here when ASCs were calc'd with log(unweighted)? I think so.
+            utility[chunk_start:chunk_end] = (
+                np.dot(chunk_alts, coefs)
+                + lnsupply[self.full_choiceidx[chunk_start:chunk_end]]
+            )
 
         if include_ascs:
-            # do this in two steps to save memory
-            utility += self.first_stage_ascs.values[self.full_choiceidx]
-            utility += self.first_stage_uneq_ascs.values[self.full_uneqchoiceidx]
+            utility += (
+                self.first_stage_ascs.values[self.full_choiceidx]
+                + self.first_stage_uneq_ascs.values[self.full_uneqchoiceidx]
+            )
 
-        util_end_time = time.perf_counter()
-        LOG.info(f'Computing full utility took {human_time(util_end_time - util_start_time)}')
         return utility
 
     def fit_first_stage(self):
@@ -891,8 +913,6 @@ class TraSortingModel(BaseSortingModel):
                 if self.weights is not None
                 else None,
             )
-
-            assert np.all(new_prices > 0), 'some prices are 0 or less!'
 
             new_prices = pd.Series(new_prices, index=self.housing_xwalk.index)
             self.price = new_prices
