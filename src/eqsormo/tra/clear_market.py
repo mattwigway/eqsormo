@@ -129,8 +129,8 @@ def clear_market_iter(
     if max_rent_to_income is None:
         feasible_alts_step = np.full_like(alt_price, True)
     else:
-        feasible_alts_step = alt_income * max_rent_to_income > alt_price
-    budget_step[feasible_alts] = price_income_transformation.apply(
+        feasible_alts_step = alt_income * max_rent_to_income > alt_price + step
+    budget_step[feasible_alts_step] = price_income_transformation.apply(
         alt_income[feasible_alts_step],
         alt_price[feasible_alts_step] + step,
         *price_income_params,
@@ -202,10 +202,27 @@ def compute_derivatives(
     step_exp_utilities = np.exp(non_price_utilities + budget_coef * budget_step)
     step_exp_utilities[~feasible_alts_step] = 0
 
-    if not np.all(np.isfinite(exp_utilities)) or not np.all(
-        np.isfinite(step_exp_utilities)
-    ):
-        raise FloatingPointError("Not all exp(utilities) are finite (scaling?)")
+    if not np.all(np.isfinite(exp_utilities)):
+        raise FloatingPointError(
+            f"Not all exp(utilities) are finite (scaling?)\n"
+            f"min non-price utility: {np.min(non_price_utilities)}\n"
+            f"max non-price utility: {np.max(non_price_utilities)}\n"
+            f"nans in non-price utility: {np.sum(np.isnan(non_price_utilities))}\n"
+            f"min budget: {np.min(budget[feasible_alts])}\n"
+            f"max budget: {np.max(budget[feasible_alts])}\n"
+            f"nans in budget: {np.sum(np.isnan(budget[feasible_alts]))}\n"
+        )
+
+    if not np.all(np.isfinite(step_exp_utilities)):
+        raise FloatingPointError(
+            "Not all exp(step_utilities) are finite (scaling)\n"
+            f"min non-price utility: {np.min(non_price_utilities)}\n"
+            f"max non-price utility: {np.max(non_price_utilities)}\n"
+            f"nans in non-price utility: {np.sum(np.isnan(non_price_utilities))}\n"
+            f"min budget: {np.min(budget_step[feasible_alts_step])}\n"
+            f"max budget: {np.max(budget_step[feasible_alts_step])}\n"
+            f"nans in budget: {np.sum(np.isnan(budget_step[feasible_alts_step]))}\n"
+        )
 
     # cache weights
     if weights is not None:
@@ -220,7 +237,7 @@ def compute_derivatives(
             probs *= alt_weights[choicemask]
         share_step = np.sum(probs)
         deriv[i] = (share_step - base_shares[i]) / price_step
-        assert deriv[i] < 0, f'derivative of price is nonnegative!'
+        assert deriv[i] < 0, f"derivative of price is nonnegative!"
         exp_utilities[choicemask] = base_exp_utilities[choicemask]
 
     return deriv

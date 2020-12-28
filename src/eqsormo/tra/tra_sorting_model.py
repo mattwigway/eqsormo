@@ -22,6 +22,9 @@ import statsmodels.api as sm
 import pandas as pd
 import numpy as np
 import datetime
+import multiprocessing
+import threading
+import queue
 
 from . import price_income
 from .clear_market import clear_market_iter
@@ -644,34 +647,6 @@ class TraSortingModel(BaseSortingModel):
         LOG.info(f"Alternatives dimensions: {human_shape(self.alternatives.shape)}")
         LOG.info(f"Alternatives use {human_bytes(self.alternatives.nbytes)} memory")
 
-    def chunked_full_alternatives(self, price_income_params):
-        """
-        With large sorting models it is not possible to materialize the entire dataset all at once, as we will quickly run out of memory.
-        This function realizes the full alternatives in chunks and yields tuples of (chunk_start, chunk_end, chunk_alts).
-
-        This is useful to calculate e.g. a utility, which can be calculated in chunks by decomposing the matrix multiplication and then concatenating.
-        """
-
-        chunk_rows = int(
-            np.floor(self.max_chunk_bytes / len(self.alternatives_colnames) / 8)
-        )  # bytes per float64
-        LOG.info(
-            f"Materializing full alternatives using {len(self.full_hhidx) // chunk_rows + 1} chunks of {chunk_rows} rows each ({human_bytes(chunk_rows * len(self.alternatives_colnames) * 8)} each)"
-        )
-
-        for chunk_start in range(0, len(self.full_hhidx), chunk_rows):
-            chunk_end = min(chunk_start + chunk_rows, len(self.full_hhidx))
-            chunk_alts = self.materialize_alternatives(
-                self.full_hhidx[chunk_start:chunk_end],
-                self.full_choiceidx[chunk_start:chunk_end],
-                self.full_uneqchoiceidx[chunk_start:chunk_end],
-                self.full_hh_hsgidx[chunk_start:chunk_end]
-                if self.household_housing_attributes is not None
-                else None,
-                price_income_params=price_income_params,
-            )
-            yield chunk_start, chunk_end, chunk_alts
-
     def full_utility(self, include_budget=True, include_ascs=True):
         """
         Calculate full utilities (i.e. utilities for all alternatives, not just sampled ones). To remain within available memory,
@@ -693,20 +668,86 @@ class TraSortingModel(BaseSortingModel):
             coefs = self.first_stage_fit.params.values
             price_income_params = np.zeros(0)
 
-        for chunk_start, chunk_end, chunk_alts in self.chunked_full_alternatives(
-            price_income_params
-        ):
-            if not include_budget:
-                # zero out budget so it does not affect utility. chunk_alts has been materialized just for us, okay
-                # to be destructive.
-                chunk_alts[:, 0] = 0
+        nthreads = multiprocessing.cpu_count()
 
-            # add systematic utility and deterministic part of ASC based on market share
-            # TODO okay to just add log(weighted) here when ASCs were calc'd with log(unweighted)? I think so.
-            utility[chunk_start:chunk_end] = (
-                np.dot(chunk_alts, coefs)
-                + lnsupply[self.full_choiceidx[chunk_start:chunk_end]]
-            )
+        task_queue = queue.Queue()
+        result_queue = queue.Queue()
+        # once set, all threads should stop
+        stop_threads = threading.Event()
+
+        # worker function to run in threads
+        # numpy releases the GIL so running in threads works pretty well
+        def worker():
+            while not stop_threads.is_set():
+                try:
+                    # every 10 seconds restart the loop so we can check if thread has been signaled to stop
+                    chunk_start, chunk_end = task_queue.get(timeout=10)
+                except queue.Empty:
+                    continue
+                else:
+                    chunk_alts = self.materialize_alternatives(
+                        self.full_hhidx[chunk_start:chunk_end],
+                        self.full_choiceidx[chunk_start:chunk_end],
+                        self.full_uneqchoiceidx[chunk_start:chunk_end],
+                        self.full_hh_hsgidx[chunk_start:chunk_end]
+                        if self.household_housing_attributes is not None
+                        else None,
+                        price_income_params=price_income_params,
+                    )
+
+                    if not include_budget:
+                        # zero out budget so it does not affect utility. chunk_alts has been materialized just for us, okay
+                        # to be destructive.
+                        chunk_alts[:, 0] = 0
+
+                    # add systematic utility and deterministic part of ASC based on market share
+                    # TODO okay to just add log(weighted) here when ASCs were calc'd with log(unweighted)? I think so.
+                    util_chunk = (
+                        np.dot(chunk_alts, coefs)
+                        + lnsupply[self.full_choiceidx[chunk_start:chunk_end]]
+                    )
+
+                    result_queue.put((chunk_start, chunk_end, util_chunk))
+                    task_queue.task_done()
+
+        LOG.info(f"computing utility using {nthreads} threads")
+
+        # Thread to put everything into the utility function
+        def consumer():
+            while not stop_threads.is_set():
+                try:
+                    # every 10 seconds restart the loop so we can check if thread has been signaled to stop
+                    chunk_start, chunk_end, util_chunk = result_queue.get(timeout=10)
+                except queue.Empty:
+                    continue
+                else:
+                    utility[chunk_start:chunk_end] = util_chunk
+                    result_queue.task_done()
+
+        threads = [
+            threading.Thread(target=worker, daemon=False) for i in range(nthreads)
+        ]
+        threads.append(threading.Thread(target=consumer, daemon=False))
+        for thread in threads:
+            thread.start()
+
+        chunk_rows = int(
+            np.floor(self.max_chunk_bytes / len(self.alternatives_colnames) / 8)
+        )  # bytes per float64
+        LOG.info(
+            f"Materializing full alternatives using {len(self.full_hhidx) // chunk_rows + 1} chunks of {chunk_rows} rows each ({human_bytes(chunk_rows * len(self.alternatives_colnames) * 8)} each)"
+        )
+
+        for chunk_start in range(0, len(self.full_hhidx), chunk_rows):
+            chunk_end = min(chunk_start + chunk_rows, len(self.full_hhidx))
+            task_queue.put((chunk_start, chunk_end))
+
+        # wait for everything to finish
+        task_queue.join()
+        result_queue.join()
+
+        # signal all threads to stop
+        stop_threads.set()
 
         if include_ascs:
             utility += (
@@ -882,6 +923,7 @@ class TraSortingModel(BaseSortingModel):
 
         itr = 0
         startTimeClear = time.perf_counter()
+        all_prices = []
         while True:
             if itr > maxiter:
                 LOG.error(f"Prices FAILED TO CONVERGE after {itr} iterations")
@@ -915,6 +957,8 @@ class TraSortingModel(BaseSortingModel):
             )
 
             new_prices = pd.Series(new_prices, index=self.housing_xwalk.index)
+            all_prices.append(new_prices)
+            pd.DataFrame(all_prices).to_parquet("prices_per_iteration.parquet")
             self.price = new_prices
 
             if converged:
