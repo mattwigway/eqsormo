@@ -18,7 +18,7 @@ import logging
 from .tra import TraSortingModel
 from . import tra
 
-version = "0.5.0"
+version = "0.4.1a"
 
 rootLogger = None
 
