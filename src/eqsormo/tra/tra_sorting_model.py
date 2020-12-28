@@ -353,11 +353,9 @@ class TraSortingModel(BaseSortingModel):
 
         alternatives = []
 
-        current_col = 0
         def add_to_colnames (col):
             colnames.append(col)
-            LOG.info(f'Loading column {col} {current_col} / {ncols}')
-            current_col += 1
+            LOG.info(f'Loading column {col} {len(colnames)} / {ncols}')
 
         # budget is first column, to make updates easier
         add_to_colnames("budget")
