@@ -125,7 +125,7 @@ def clear_market_iter(
         *price_income_params,
     )
 
-    deriv = compute_derivatives(
+    jacob = compute_derivatives(
         price,
         alt_income,
         choiceidx,
@@ -142,14 +142,12 @@ def clear_market_iter(
         weights,
     )
 
-    if not np.all(deriv < 0):
-        raise ValueError("some derivatives of price are nonnegative")
+    LOG.info("inverting Jacobian")
+    jacob_inv = np.linalg.inv(jacob)
 
-    LOG.info(f"Computed price derivatives:\n{pd.Series(deriv).describe()}")
-
-    # this is 7.7a from Tra's dissertation
+    # this is 7.7 from Tra's dissertation
     orig_fixed_price = price[fixed_price]
-    price = price - (excess_demand / deriv) * speed_control
+    price = price - jacob_inv @ excess_demand
 
     # fix one price from changing so the system is defined
     price[fixed_price] = orig_fixed_price
@@ -174,7 +172,7 @@ def compute_derivatives(
     feasible_alts_step,
     weights,
 ):
-    deriv = np.zeros_like(price)
+    jacob = np.zeros((len(price), len(price)))
 
     base_exp_utilities = np.exp(non_price_utilities + budget_coef * budget)
     # exp utility of zero is out of choice set
@@ -243,28 +241,28 @@ def compute_derivatives(
                     choicemask = np.nonzero(choiceidx == i)
                     exp_utilities[choicemask] = step_exp_utilities[choicemask]
                     util_sums = np.bincount(hhidx, weights=exp_utilities)
-                    probs = exp_utilities[choicemask] / util_sums[hhidx[choicemask]]
+                    probs = exp_utilities / util_sums[hhidx]
                     if weights is not None:
-                        probs *= alt_weights[choicemask]
-                    share_step = np.sum(probs)
+                        probs *= alt_weights
+                    share_step = np.bincount(choiceidx, weights=probs)
                     del probs
-                    deriv = (share_step - base_shares[i]) / price_step
-                    result_queue.put((i, deriv))
+                    jaccol = (share_step - base_shares) / price_step
+                    result_queue.put((i, jaccol))
                     task_queue.task_done()
 
         def consumer():
             while not stop_threads.is_set():
                 try:
-                    i, val = result_queue.get(timeout=10)
+                    i, jaccol = result_queue.get(timeout=10)
                 except queue.Empty:
                     continue
                 else:
                     assert (
-                        val < 0
-                    ), f"derivative of price for alt {i} is non-negative: {val}"
+                        jaccol[i] < 0
+                    ), f"derivative of price for alt {i} is non-negative: {jaccol}"
                     if i % 10 == 9:
-                        LOG.info(f"computed derivative {i + 1} / {len(deriv)}")
-                    deriv[i] = val
+                        LOG.info(f"computed derivative {i + 1} / {len(price)}")
+                    jacob[:, i] = jaccol
                     result_queue.task_done()
 
         # might need something more complex here to account for the memory pressure of sorting. Even if you have
@@ -290,7 +288,7 @@ def compute_derivatives(
         # signal threads to shut down
         stop_threads.set()
 
-        return deriv
+        return jacob
     finally:
         # clean up
         os.remove(util_file)
