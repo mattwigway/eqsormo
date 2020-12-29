@@ -267,7 +267,7 @@ def compute_derivatives(
 
         # might need something more complex here to account for the memory pressure of sorting. Even if you have
         # 16 cores, you might not have enough memory to compute 16 derivatives at once.
-        nthreads = multiprocessing.cpu_count()
+        nthreads = 2
         LOG.info(f"computing derivatives using {nthreads} threads")
 
         # start threads

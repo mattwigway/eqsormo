@@ -435,9 +435,9 @@ class TraSortingModel(BaseSortingModel):
         LOG.debug(
             f"Materialized alternatives into {human_shape(alternatives.shape)} array using {human_bytes(alternatives.nbytes)} in {human_time(total_time)}"
         )
-        self.alternatives_colnames = (
-            colnames  # hacky to set this every time but it never changes
-        )
+
+        # hacky to set this every time but it never changes
+        self.alternatives_colnames = colnames
 
         if self.alternatives_stds is None:
             self.alternatives_stds = np.std(alternatives, axis=0)
