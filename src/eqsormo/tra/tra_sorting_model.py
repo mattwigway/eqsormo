@@ -961,17 +961,26 @@ class TraSortingModel(BaseSortingModel):
                 else None,
             )
 
-            new_prices = pd.Series(new_prices, index=self.housing_xwalk.index)
-            LOG.info(f'Prices:\n{new_prices.describe()}')
+            # reindex should be a no-op
+            new_prices = pd.Series(new_prices, index=self.housing_xwalk.index).reindex(
+                self.price.index
+            )
+            LOG.info(f"Prices:\n{new_prices.describe()}")
 
             all_prices.append(new_prices)
             pd.DataFrame(all_prices).to_parquet("prices_per_iteration.parquet")
 
-            assert not np.any(new_prices < 0), 'some prices are negative!'
+            if np.any(new_prices < 0):
+                LOG.warn(
+                    f"{np.sum(new_prices < 0)}  prices are negative. The solver may work its way out of this"
+                )
 
             self.price = new_prices
 
             if converged:
+                assert not np.any(
+                    self.price < 0
+                ), "some prices are negative at convergence!"
                 LOG.info(f"prices converged after {itr} iterations")
                 break
 

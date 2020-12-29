@@ -43,6 +43,7 @@ def clear_market_iter(
     convergence_criterion=1e-4,
     step=1e-2,
     weights=None,
+    fixed_price=0,
 ):
     """
     Run one iteration of the market-clearing algorithm.
@@ -54,6 +55,7 @@ def clear_market_iter(
     of market shares to check convergence after prices are updated.
     """
     price = starting_price
+    orig_fixed_price = price[fixed_price]
 
     alt_income = income[hhidx]
 
@@ -87,7 +89,9 @@ def clear_market_iter(
     if np.allclose(shares, supply):
         return price, True
 
-    assert np.allclose(np.sum(shares), np.sum(supply)), 'shares and supply totals do not match'
+    assert np.allclose(
+        np.sum(shares), np.sum(supply)
+    ), "shares and supply totals do not match"
 
     excess_demand = shares - supply
 
@@ -120,11 +124,6 @@ def clear_market_iter(
         *price_income_params,
     )
 
-    # fix one price from changing
-    # TODO pick price in a smarter way (PUMA with least change?)
-    # Appears to be causing convergence problems.
-    # excess_demand[0] = 0
-
     deriv = compute_derivatives(
         price,
         alt_income,
@@ -145,11 +144,14 @@ def clear_market_iter(
     if not np.all(deriv < 0):
         raise ValueError("some derivatives of price are nonnegative")
 
-    LOG.info(f'Computed price derivatives:\n{pd.Series(deriv).describe()}')
+    LOG.info(f"Computed price derivatives:\n{pd.Series(deriv).describe()}")
 
     # this is 7.7a from Tra's dissertation
     price = price - (excess_demand / deriv)
     LOG.info(f"Max unit diff: {maxdiff}")
+
+    # fix one price from changing so the system is defined
+    price[fixed_price] = orig_fixed_price
 
     return price, False  # not converged yet (or we don't know anyhow)
 
@@ -234,7 +236,7 @@ def compute_derivatives(
                         shape=step_exp_utilities.shape,
                     )
                     # save memory by just saving indices, not full bool array
-                    # in the model in my disseration, there are ~1000 choices, so this will be 1/1000 of the indices
+                    # in the model in my dissertation, there are ~1000 choices, so this will be 1/1000 of the indices
                     # since an int is 32 bytes (or maybe 64 since numpy arrays can be big), and a bool I believe takes up
                     # an entire byte, we come out ahead b/c 1/1000 * 32 < 8
                     choicemask = np.nonzero(choiceidx == i)
