@@ -55,7 +55,6 @@ def clear_market_iter(
     of market shares to check convergence after prices are updated.
     """
     price = starting_price
-    orig_fixed_price = price[fixed_price]
 
     alt_income = income[hhidx]
 
@@ -81,6 +80,7 @@ def clear_market_iter(
         budget_coef=budget_coef,
         max_rent_to_income=max_rent_to_income,
         weights=weights,
+        speed_control=0.25,
     )
 
     if np.any(shares == 0):
@@ -147,7 +147,8 @@ def clear_market_iter(
     LOG.info(f"Computed price derivatives:\n{pd.Series(deriv).describe()}")
 
     # this is 7.7a from Tra's dissertation
-    price = price - (excess_demand / deriv)
+    orig_fixed_price = price[fixed_price]
+    price = price - (excess_demand / deriv) * speed_control
     LOG.info(f"Max unit diff: {maxdiff}")
 
     # fix one price from changing so the system is defined

@@ -972,7 +972,7 @@ class TraSortingModel(BaseSortingModel):
 
             if np.any(new_prices < 0):
                 LOG.warn(
-                    f"{np.sum(new_prices < 0)}  prices are negative. The solver may work its way out of this"
+                    f"{np.sum(new_prices < 0)} prices are negative. The solver may work its way out of this."
                 )
 
             self.price = new_prices
