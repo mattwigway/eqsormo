@@ -206,7 +206,7 @@ def compute_derivatives(
 
         if not np.all(np.isfinite(step_exp_utilities)):
             raise FloatingPointError(
-                "Not all exp(step_utilities) are finite (scaling)\n"
+                "Not all exp(step_utilities) are finite (scaling?)\n"
                 f"min non-price utility: {np.min(non_price_utilities)}\n"
                 f"max non-price utility: {np.max(non_price_utilities)}\n"
                 f"nans in non-price utility: {np.sum(np.isnan(non_price_utilities))}\n"
