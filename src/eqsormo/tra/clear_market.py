@@ -44,6 +44,7 @@ def clear_market_iter(
     step=1e-2,
     weights=None,
     fixed_price=0,
+    speed_control=0.25
 ):
     """
     Run one iteration of the market-clearing algorithm.
@@ -79,8 +80,7 @@ def clear_market_iter(
         price_income_params=price_income_params,
         budget_coef=budget_coef,
         max_rent_to_income=max_rent_to_income,
-        weights=weights,
-        speed_control=0.25,
+        weights=weights
     )
 
     if np.any(shares == 0):
@@ -97,6 +97,7 @@ def clear_market_iter(
 
     # maxdiff = np.max(np.abs(shares - supply) / supply)
     maxdiff = np.max(np.abs(excess_demand / supply))
+    LOG.info(f"Max unit diff: {maxdiff}")
 
     # Use the approach defined in Tra (2007), page 108, eq. 7.7/7.7a, which is in turn from Anas (1982).
     alt_price = price[choiceidx]
@@ -149,7 +150,6 @@ def clear_market_iter(
     # this is 7.7a from Tra's dissertation
     orig_fixed_price = price[fixed_price]
     price = price - (excess_demand / deriv) * speed_control
-    LOG.info(f"Max unit diff: {maxdiff}")
 
     # fix one price from changing so the system is defined
     price[fixed_price] = orig_fixed_price
