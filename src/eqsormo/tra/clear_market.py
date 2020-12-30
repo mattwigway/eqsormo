@@ -96,7 +96,10 @@ def clear_market_iter(
     # same logic as the ASC-finding algorithm, move prices that are too high lower and vice-versa
     # it's possible however that since prices are inside a log and multiplied by a coef that there
     # are some situations this could not climb out of.
-    return price - np.log(shares / supply), False
+    orig_fixed_price = price[fixed_price]
+    price -= np.log(shares / supply)
+    price[fixed_price] = orig_fixed_price
+    return price, False
 
 
 def compute_shares(
