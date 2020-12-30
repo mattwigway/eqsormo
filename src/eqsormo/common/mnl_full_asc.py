@@ -20,7 +20,9 @@ import scipy.stats
 import time
 from logging import getLogger
 import pandas as pd
-import statsmodels.tools.numdiff
+import threading
+import multiprocessing
+import queue
 
 from .compute_ascs import compute_ascs
 from .util import human_time
@@ -282,31 +284,72 @@ class MNLFullASC(object):
         elif isinstance(step_size, float):
             step_size = np.full(len(params), step_size)
 
-        LOG.info("computing Hessian")
+        nthreads = multiprocessing.cpu_count()
+        LOG.info(f"computing Hessian using {nthreads} threads")
         # we need the outer product to scale the finite diff appx below
         prod = np.outer(step_size, step_size)
         hess = np.zeros_like(prod)
 
+        task_queue = queue.Queue()
+        result_queue = queue.Queue()
+        stop_threads = threading.Event()
+
         n = len(params)
+
+        # parallelized by rows, each thread calcs rows at a time, b/c there is some computation that's common across
+        # a row.
+        def worker():
+            while not stop_threads.is_set():
+                try:
+                    i = task_queue.get(timeout=10)
+                except queue.Empty:
+                    continue
+                else:
+                    step_i = self.alternatives[:, i] * step_size[i]
+                    LOG.info(f"Hessian starting row {i} / {n}")
+                    for j in range(i, n):
+                        step_j = self.alternatives[:, j] * step_size[j]
+                        elem = (
+                            self.negative_log_likelihood_for_utility(
+                                utility + step_i + step_j
+                            )
+                            - self.negative_log_likelihood_for_utility(
+                                utility + step_i - step_j
+                            )
+                            - (
+                                self.negative_log_likelihood_for_utility(
+                                    utility - step_i + step_j
+                                )
+                                - self.negative_log_likelihood_for_utility(
+                                    utility - step_i - step_j
+                                )
+                            )
+                        ) / (4 * prod[i, j])
+
+                        result_queue.put((i, j, elem))
+                    # only mark as done once per row
+                    task_queue.task_done()
+
+        def consumer():
+            while not stop_threads.is_set():
+                try:
+                    i, j, elem = result_queue.get(timeout=10)
+                except queue.Empty:
+                    continue
+                else:
+                    hess[i, j] = hess[j, i] = elem
+                    result_queue.task_done()
+
+        for i in range(nthreads):
+            threading.Thread(target=worker).start()
+        threading.Thread(target=consumer).start()
+
         for i in range(n):
-            step_i = self.alternatives[:, i] * step_size[i]
-            LOG.info(f"Hessian starting row {i} / {n}")
-            for j in range(i, n):
-                step_j = self.alternatives[:, j] * step_size[j]
-                hess[i, j] = hess[j, i] = (
-                    self.negative_log_likelihood_for_utility(utility + step_i + step_j)
-                    - self.negative_log_likelihood_for_utility(
-                        utility + step_i - step_j
-                    )
-                    - (
-                        self.negative_log_likelihood_for_utility(
-                            utility - step_i + step_j
-                        )
-                        - self.negative_log_likelihood_for_utility(
-                            utility - step_i - step_j
-                        )
-                    )
-                ) / (4 * prod[i, j])
+            task_queue.put(i)
+
+        task_queue.join()
+        result_queue.join()
+        stop_threads.set()
 
         return hess
 

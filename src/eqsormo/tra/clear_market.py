@@ -44,7 +44,7 @@ def clear_market_iter(
     step=1e-2,
     weights=None,
     fixed_price=0,
-    speed_control=0.25
+    speed_control=0.25,
 ):
     """
     Run one iteration of the market-clearing algorithm.
@@ -80,7 +80,7 @@ def clear_market_iter(
         price_income_params=price_income_params,
         budget_coef=budget_coef,
         max_rent_to_income=max_rent_to_income,
-        weights=weights
+        weights=weights,
     )
 
     if np.any(shares == 0):
