@@ -19,11 +19,6 @@
 import numpy as np
 
 from logging import getLogger
-import tempfile
-import queue
-import threading
-import multiprocessing
-import os
 import pandas as pd
 
 LOG = getLogger(__name__)
@@ -93,7 +88,9 @@ def clear_market_iter(
         np.sum(shares), np.sum(supply)
     ), "shares and supply totals do not match"
 
-    LOG.info(f"Ratios of market share to supply: {(shares / supply).describe()}")
+    LOG.info(
+        f"Ratios of market share to supply: {pd.Series(shares / supply).describe()}"
+    )
 
     # same logic as the ASC-finding algorithm, move prices that are too high lower and vice-versa
     # it's possible however that since prices are inside a log and multiplied by a coef that there
