@@ -93,9 +93,17 @@ def clear_market_iter(
         np.sum(shares), np.sum(supply)
     ), "shares and supply totals do not match"
 
+    LOG.info(f"Ratios of market share to supply: {(shares / supply).describe()}")
+
     # same logic as the ASC-finding algorithm, move prices that are too high lower and vice-versa
     # it's possible however that since prices are inside a log and multiplied by a coef that there
     # are some situations this could not climb out of.
+    # I think that when using this formulation to compute ASCs, ln (share / supply) is equivalent to finding the ASC
+    # that would produce the correct market share holding all other ASCs constant, and continuing on to convergence---
+    # not that different than the approach using the derivative proposed in Tra's dissertation, eq. 7.7/7.7a, although
+    # without using a straight line approximation. Here, there's no theory other than that when the ratio is > 1, reduce
+    # price, and do the opposite when it's less. But since (I believe) there is a single unique price vector that clears
+    # the market as long as we hold one price fixed, how you get to equilibrium doesn't matter, as long as you get there.
     orig_fixed_price = price[fixed_price]
     price -= np.log(shares / supply)
     price[fixed_price] = orig_fixed_price
