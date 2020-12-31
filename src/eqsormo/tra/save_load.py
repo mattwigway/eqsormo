@@ -109,11 +109,14 @@ def save(basefile, model):
     }
 
     for field in FIELDS:
-        val = getattr(model, field)
-        if isinstance(val, np.ndarray):
-            numpy_fields[field] = val
+        if hasattr(model, field):
+            val = getattr(model, field)
+            if isinstance(val, np.ndarray):
+                numpy_fields[field] = val
+            else:
+                pickle_fields[field] = val
         else:
-            pickle_fields[field] = val
+            LOG.warn(f"Field {field} not found in model to be serialized")
 
     with open(f"{basefile}.pickle", "wb") as out:
         dill.dump(pickle_fields, out)
