@@ -786,6 +786,7 @@ class TraSortingModel(BaseSortingModel):
             method=self.method,
             minimize_options=self.minimize_options,
             est_ses=self.est_first_stage_ses,
+            add_ln_supply=(0,),
         )
 
         self.first_stage_fit.fit()
