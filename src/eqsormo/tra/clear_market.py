@@ -283,7 +283,7 @@ def compute_derivatives(
             *range(fixed_price),
             *range(fixed_price + 1, len(price)),
         )):
-            task_queue.put(jacidx, choice)
+            task_queue.put((jacidx, choice))
 
         # await completion
         task_queue.join()
