@@ -260,7 +260,7 @@ def compute_derivatives(
                     continue
                 else:
                     if jacidx % 10 == 9:
-                        LOG.info(f"computed derivative {i + 1} / {len(price) - 1}")
+                        LOG.info(f"computed derivative {jacidx + 1} / {len(price) - 1}")
                     jacob[:, jacidx] = jaccol
                     result_queue.task_done()
 
