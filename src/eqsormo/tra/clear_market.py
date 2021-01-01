@@ -290,8 +290,8 @@ def compute_derivatives(
         result_queue.join()
 
         assert not np.any(
-            np.diag(jacob) < 0
-        ), "some diagonal elements of jacobian are negative!"
+            np.diag(jacob) >= 0
+        ), "some diagonal elements of jacobian are nonnegative!"
 
         # signal threads to shut down
         stop_threads.set()
