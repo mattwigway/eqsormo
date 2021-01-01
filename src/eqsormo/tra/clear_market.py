@@ -259,9 +259,9 @@ def compute_derivatives(
                 except queue.Empty:
                     continue
                 else:
-                    if i % 10 == 9:
-                        LOG.info(f"computed derivative {i + 1} / {len(price)}")
-                    jacob[:, i] = jaccol
+                    if jacidx % 10 == 9:
+                        LOG.info(f"computed derivative {i + 1} / {len(price) - 1}")
+                    jacob[:, jacidx] = jaccol
                     result_queue.task_done()
 
         # might need something more complex here to account for the memory pressure of sorting. Even if you have
