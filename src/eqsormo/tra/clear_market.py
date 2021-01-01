@@ -279,7 +279,7 @@ def compute_derivatives(
         # fill queue
         # note that jacidx is the index in the Jacobian, which is not the same as choice which is the housing choice
         # b/c one housing choice is skipped in the Jacobian
-        for jacidx, choice in (
+        for jacidx, choice in enumerate(
             *range(fixed_price),
             *range(fixed_price + 1, len(price)),
         ):
