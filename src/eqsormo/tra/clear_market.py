@@ -44,7 +44,6 @@ def clear_market_iter(
     step=1e-2,
     weights=None,
     fixed_price=0,
-    speed_control=0.25,
 ):
     """
     Run one iteration of the market-clearing algorithm.
@@ -140,22 +139,22 @@ def clear_market_iter(
         feasible_alts,
         feasible_alts_step,
         weights,
+        fixed_price,
     )
 
     LOG.info("inverting Jacobian")
     jacob_inv = np.linalg.inv(jacob)
 
     # this is 7.7 from Tra's dissertation
-    orig_fixed_price = price[fixed_price]
-    price = price - jacob_inv @ excess_demand
-
     # fix one price from changing so the system is defined
-    price[fixed_price] = orig_fixed_price
+    pricemask = np.arange(len(price)) != fixed_price
+    price[pricemask] = price[pricemask] - (jacob_inv @ excess_demand[pricemask])
 
     return price, False  # not converged yet (or we don't know anyhow)
 
 
 # Numba does not help with this function
+# compute derivatives of the prices. This returns an (n - 1) x (n - 1) jacobian, since one price is fixed.
 def compute_derivatives(
     price,
     alt_income,
@@ -171,8 +170,11 @@ def compute_derivatives(
     feasible_alts,
     feasible_alts_step,
     weights,
+    fixed_price=0,
 ):
-    jacob = np.zeros((len(price), len(price)))
+    # -1 b/c we don't compute jac for one price
+    jacob = np.zeros((len(price) - 1, len(price) - 1))
+    pricemask = np.arange(len(price)) != fixed_price
 
     base_exp_utilities = np.exp(non_price_utilities + budget_coef * budget)
     # exp utility of zero is out of choice set
@@ -224,7 +226,7 @@ def compute_derivatives(
         def worker():
             while not stop_threads.is_set():
                 try:
-                    i = task_queue.get(timeout=10)
+                    jacidx, choice = task_queue.get(timeout=10)
                 except queue.Empty:
                     continue  # return to top of loop to check for stop_threads event
                 else:
@@ -238,7 +240,7 @@ def compute_derivatives(
                     # in the model in my dissertation, there are ~1000 choices, so this will be 1/1000 of the indices
                     # since an int is 32 bytes (or maybe 64 since numpy arrays can be big), and a bool I believe takes up
                     # an entire byte, we come out ahead b/c 1/1000 * 32 < 8
-                    choicemask = np.nonzero(choiceidx == i)
+                    choicemask = np.nonzero(choiceidx == choice)
                     exp_utilities[choicemask] = step_exp_utilities[choicemask]
                     util_sums = np.bincount(hhidx, weights=exp_utilities)
                     probs = exp_utilities / util_sums[hhidx]
@@ -247,19 +249,16 @@ def compute_derivatives(
                     share_step = np.bincount(choiceidx, weights=probs)
                     del probs
                     jaccol = (share_step - base_shares) / price_step
-                    result_queue.put((i, jaccol))
+                    result_queue.put((jacidx, jaccol[pricemask]))
                     task_queue.task_done()
 
         def consumer():
             while not stop_threads.is_set():
                 try:
-                    i, jaccol = result_queue.get(timeout=10)
+                    jacidx, jaccol = result_queue.get(timeout=10)
                 except queue.Empty:
                     continue
                 else:
-                    assert (
-                        jaccol[i] < 0
-                    ), f"derivative of price for alt {i} is non-negative: {jaccol}"
                     if i % 10 == 9:
                         LOG.info(f"computed derivative {i + 1} / {len(price)}")
                     jacob[:, i] = jaccol
@@ -278,12 +277,21 @@ def compute_derivatives(
         threading.Thread(target=consumer, daemon=False).start()
 
         # fill queue
-        for i in range(len(price)):
-            task_queue.put(i)
+        # note that jacidx is the index in the Jacobian, which is not the same as choice which is the housing choice
+        # b/c one housing choice is skipped in the Jacobian
+        for jacidx, choice in (
+            *range(fixed_price),
+            *range(fixed_price + 1, len(price)),
+        ):
+            task_queue.put(jacidx, choice)
 
         # await completion
         task_queue.join()
         result_queue.join()
+
+        assert not np.any(
+            np.diag(jacob) < 0
+        ), "some diagonal elements of jacobian are negative!"
 
         # signal threads to shut down
         stop_threads.set()
