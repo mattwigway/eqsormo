@@ -960,6 +960,7 @@ class TraSortingModel(BaseSortingModel):
                 weights=self.weights.loc[self.hh_xwalk.index].values
                 if self.weights is not None
                 else None,
+                rng=self._rng,
             )
 
             # reindex should be a no-op

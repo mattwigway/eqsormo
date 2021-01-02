@@ -28,6 +28,8 @@ import pandas as pd
 
 LOG = getLogger(__name__)
 
+local_rng = np.random.default_rng()
+
 
 def clear_market_iter(
     non_price_utilities,
@@ -44,7 +46,7 @@ def clear_market_iter(
     step=1e-2,
     weights=None,
     fixed_price=0,
-    speed_control=0.25,
+    rng=local_rng,
 ):
     """
     Run one iteration of the market-clearing algorithm.
@@ -149,7 +151,7 @@ def clear_market_iter(
 
     # this is 7.7a from Tra's dissertation
     orig_fixed_price = price[fixed_price]
-    price = price - (excess_demand / deriv) * speed_control
+    price = price - (excess_demand / deriv) * rng.uniform(0, 1)
 
     # fix one price from changing so the system is defined
     price[fixed_price] = orig_fixed_price
