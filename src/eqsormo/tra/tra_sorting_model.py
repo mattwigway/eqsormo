@@ -930,17 +930,25 @@ class TraSortingModel(BaseSortingModel):
         itr = 0
         startTimeClear = time.perf_counter()
         all_prices = []
+
+        if self.endogenous_variable_defs is None:
+            LOG.info("no endogenous variables defined, caching non-price utilites")
+            non_price_utilities = self.full_utility(include_budget=False)
+            assert not np.any(np.isnan(non_price_utilities))
+
         while True:
             if itr > maxiter:
                 LOG.error(f"Prices FAILED TO CONVERGE after {itr} iterations")
                 break
             itr += 1
             LOG.info(f"sorting: begin iteration {itr}")
-            self.initialize_or_update_endogenous_variables(initial=False)
 
-            LOG.info("finding non-price utilites")
-            non_price_utilities = self.full_utility(include_budget=False)
-            assert not np.any(np.isnan(non_price_utilities))
+            if self.endogenous_variable_defs is not None:
+                self.initialize_or_update_endogenous_variables(initial=False)
+
+                LOG.info("finding non-price utilites")
+                non_price_utilities = self.full_utility(include_budget=False)
+                assert not np.any(np.isnan(non_price_utilities))
 
             # Note that I am intentionally _not_ dropping hh/choice combinations here that do not meet rent to income criteria, because which households those are
             # might change in the sorting phase. The filtering happens there. This does not matter for the calculation of utility below, since utilities for
