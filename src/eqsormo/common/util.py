@@ -41,3 +41,7 @@ def human_time(seconds):
 def human_shape(shape):
     "Shape of a numpy array in human-readable format, e.g. 2x2"
     return "x".join(map(str, shape))
+
+
+class ConvergenceError(Exception):
+    pass

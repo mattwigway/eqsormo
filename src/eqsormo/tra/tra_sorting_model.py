@@ -27,9 +27,9 @@ import threading
 import queue
 
 from . import price_income
-from .clear_market import clear_market_iter
+from .clear_market import ClearMarket
 from eqsormo.common import BaseSortingModel, MNLFullASC
-from eqsormo.common.util import human_bytes, human_time, human_shape
+from eqsormo.common.util import human_bytes, human_time, human_shape, ConvergenceError
 from eqsormo.common.compute_ascs import compute_ascs
 import eqsormo
 from . import save_load
@@ -70,6 +70,7 @@ class TraSortingModel(BaseSortingModel):
         income,
         choice,
         unequilibrated_choice,
+        fixed_price,
         price_income_transformation=price_income.logdiff,
         price_income_starting_values=[],
         endogenous_variable_defs: Dict[str, Callable[[Any, Any], float]] = None,
@@ -115,7 +116,11 @@ class TraSortingModel(BaseSortingModel):
         :type income: Pandas series of numbers, indexed like household_attributes
 
         :param choice: The choice made by the household. Should be index values in household_attributes
-        :param type: Pandas series, indexed like household_attributes
+        :type choice: Pandas series, indexed like household_attributes
+
+        :param fixed_price: Which price to fix in price finding
+        :type fixed_price: float
+
 
         :param endogenous_variable_defs: This is a dictionary mapping variable names to functions that calculate them,
             for endogenous variables that need to be updated in the sorting stage of the model, as household re-sort
@@ -199,6 +204,7 @@ class TraSortingModel(BaseSortingModel):
         self.max_rent_to_income = max_rent_to_income
         self.max_chunk_bytes = max_chunk_bytes
         self.est_first_stage_ses = est_first_stage_ses
+        self.fixed_price = fixed_price
 
         self.seed = seed
         self._rng = np.random.default_rng(seed=seed)
@@ -918,75 +924,11 @@ class TraSortingModel(BaseSortingModel):
             self.first_stage_ascs = pred_ascs
         else:
             LOG.info("No second stage fit, not updating")
-            pred_ascs = self.first_stage_ascs[0]
 
-        if self.price_income_transformation.n_params > 0:
-            price_income_params = self.first_stage_fit.params.values[
-                -self.price_income_params :
-            ]
-        else:
-            price_income_params = np.zeros(0)
-
-        itr = 0
-        startTimeClear = time.perf_counter()
-        all_prices = []
-        while True:
-            if itr > maxiter:
-                LOG.error(f"Prices FAILED TO CONVERGE after {itr} iterations")
-                break
-            itr += 1
-            LOG.info(f"sorting: begin iteration {itr}")
-            self.initialize_or_update_endogenous_variables(initial=False)
-
-            LOG.info("finding non-price utilites")
-            non_price_utilities = self.full_utility(include_budget=False)
-            assert not np.any(np.isnan(non_price_utilities))
-
-            # Note that I am intentionally _not_ dropping hh/choice combinations here that do not meet rent to income criteria, because which households those are
-            # might change in the sorting phase. The filtering happens there. This does not matter for the calculation of utility below, since utilities for
-            # different alternatives are independent of each other and the budget is set to zero anyhow.
-
-            new_prices, converged = clear_market_iter(
-                non_price_utilities=non_price_utilities,
-                hhidx=self.full_hhidx,
-                choiceidx=self.full_choiceidx,
-                supply=supply,
-                income=self.income.loc[self.hh_xwalk.index].values,
-                starting_price=self.price.loc[self.housing_xwalk.index].values,
-                price_income_transformation=self.price_income_transformation,
-                price_income_params=price_income_params,
-                budget_coef=self.first_stage_fit.params["budget"],
-                max_rent_to_income=self.max_rent_to_income,
-                weights=self.weights.loc[self.hh_xwalk.index].values
-                if self.weights is not None
-                else None,
-            )
-
-            # reindex should be a no-op
-            new_prices = pd.Series(new_prices, index=self.housing_xwalk.index).reindex(
-                self.price.index
-            )
-            LOG.info(f"Prices:\n{new_prices.describe()}")
-
-            all_prices.append(new_prices)
-            pd.DataFrame(all_prices).to_parquet("prices_per_iteration.parquet")
-
-            if np.any(new_prices < 0):
-                LOG.warn(
-                    f"{np.sum(new_prices < 0)} prices are negative. The solver may work its way out of this."
-                )
-
-            self.price = new_prices
-
-            if converged:
-                assert not np.any(
-                    self.price < 0
-                ), "some prices are negative at convergence!"
-                LOG.info(f"prices converged after {itr} iterations")
-                break
-
-        endTimeClear = time.perf_counter()
-        LOG.info(f"sorting took {human_time(endTimeClear - startTimeClear)}")
+        clear_market = ClearMarket(self)
+        converged = clear_market.clear_market()
+        if not converged:
+            raise ConvergenceError("Prices did not converge!")
 
     def initialize_or_update_endogenous_variables(self, initial: bool) -> None:
         """
