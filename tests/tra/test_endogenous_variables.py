@@ -46,6 +46,7 @@ def test_endogenous_variables(monkeypatch):
             "mean_income": lambda hh, inc, weights: np.average(inc, weights=weights),
         },
         neighborhoods=pd.Series(["a", "a", "b", "b", "b"]),
+        fixed_price=0,
     )
 
     model.create_alternatives()
@@ -136,6 +137,7 @@ def test_endogenous_variables_with_weights(monkeypatch):
             "mean_income": lambda hh, inc, weights: np.average(inc, weights=weights),
         },
         neighborhoods=pd.Series(["a", "a", "b", "b", "b"]),
+        fixed_price=0,
     )
 
     model.create_alternatives()
