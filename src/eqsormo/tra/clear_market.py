@@ -148,7 +148,7 @@ def clear_market_iter(
     # this is 7.7 from Tra's dissertation
     # fix one price from changing so the system is defined
     pricemask = np.arange(len(price)) != fixed_price
-    price[pricemask] = price[pricemask] - ((jacob_inv @ excess_demand[pricemask]) * np.random.uniform(0, 1))
+    price[pricemask] = price[pricemask] - ((jacob_inv @ excess_demand[pricemask]) * 0.1)
 
     return price, False  # not converged yet (or we don't know anyhow)
 
