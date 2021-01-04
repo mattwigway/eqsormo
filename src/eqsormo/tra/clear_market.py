@@ -129,7 +129,7 @@ class ClearMarket(object):
         probs = exp_utility / expsums[self.model.full_hhidx]
 
         if self.model.weights is not None:
-            probs *= self.model.weights[self.model.full_hhidx]
+            probs *= self.model.weights.loc[self.model.hh_xwalk].to_numpy()[self.model.full_hhidx]
 
         shares = np.bincount(self.model.full_choiceidx, weights=probs)
 
