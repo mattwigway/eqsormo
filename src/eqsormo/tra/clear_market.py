@@ -129,7 +129,9 @@ class ClearMarket(object):
         probs = exp_utility / expsums[self.model.full_hhidx]
 
         if self.model.weights is not None:
-            probs *= self.model.weights.loc[self.model.hh_xwalk.index].to_numpy()[self.model.full_hhidx]
+            probs *= self.model.weights.loc[self.model.hh_xwalk.index].to_numpy()[
+                self.model.full_hhidx
+            ]
 
         shares = np.bincount(self.model.full_choiceidx, weights=probs)
 
@@ -168,11 +170,13 @@ class ClearMarket(object):
         From a price vector resulting from root finding, add the fixed price back in
         """
         # insert the fixed price at location fixed_price_index
-        return np.concatenate((
-            price[: self.fixed_price_index],
-            [self.fixed_price],
-            price[self.fixed_price_index :],
-        ))
+        return np.concatenate(
+            (
+                price[: self.fixed_price_index],
+                [self.fixed_price],
+                price[self.fixed_price_index :],
+            )
+        )
 
     def to_pandas_price(self, price):
         """
@@ -185,13 +189,13 @@ class ClearMarket(object):
 
         budgets, feasible_alts = self.get_budgets(price)
         budget_coef = self.model.first_stage_fit.params.budget
-        base_exp_utilities = np.exp(self.non_price_utilities + budget_coef * budget)
+        base_exp_utilities = np.exp(self.non_price_utilities + budget_coef * budgets)
         # exp utility of zero is out of choice set
         base_exp_utilities[~feasible_alts] = 0
         del budgets, feasible_alts
 
         if not np.all(np.isfinite(base_exp_utilities)):
-            raise FloatingPointError(f"Not all exp(utilities) are finite (scaling?)")
+            raise FloatingPointError("Not all exp(utilities) are finite (scaling?)")
 
         budget_step, feasible_alts_step = self.get_budgets(price + self.price_step)
         budget_coef = self.model.first_stage_fit.params.budget

@@ -181,7 +181,7 @@ def load(basefile):
         max_chunk_bytes=get("max_chunk_bytes"),
         est_first_stage_ses=get("est_first_stage_ses"),
         seed=get("seed"),
-        fixed_price=get("fixed_price")
+        fixed_price=get("fixed_price"),
     )
 
     for field in FIELDS:
