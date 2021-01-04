@@ -77,7 +77,7 @@ class ClearMarket(object):
             jacob_inv = np.linalg.inv(jacob)
 
             # this is 7.7 from Tra's dissertation
-            price_delta_full = jacob_inv @ excess_demand
+            price_delta_full = jacob_inv @ self.remove_fixed_price(excess_demand)
             current_obj_val = np.sum(excess_demand ** 2)
             while True:
                 LOG.info("computing new prices and market shares")
