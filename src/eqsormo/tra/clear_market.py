@@ -81,7 +81,7 @@ class ClearMarket(object):
             current_obj_val = np.sum(excess_demand ** 2)
             while True:
                 LOG.info("computing new prices and market shares")
-                new_price = current_obj_val - price_delta_full * alpha
+                new_price = current_price - price_delta_full * alpha
                 new_shares = self.shares(new_price)
                 new_obj_val = np.sum((new_shares - self.supply) ** 2)
                 if new_obj_val < current_obj_val:
