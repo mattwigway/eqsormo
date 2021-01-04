@@ -168,11 +168,11 @@ class ClearMarket(object):
         From a price vector resulting from root finding, add the fixed price back in
         """
         # insert the fixed price at location fixed_price_index
-        return np.concat(
+        return np.concatenate((
             price[: self.fixed_price_index],
             [self.fixed_price],
             price[self.fixed_price_index :],
-        )
+        ))
 
     def to_pandas_price(self, price):
         """
