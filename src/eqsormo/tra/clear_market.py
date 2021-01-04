@@ -65,10 +65,10 @@ class ClearMarket(object):
             excess_demand = shares - self.supply
             # since they always have to sum to 100% of hhs max will always be >= 0, and min <= 0
             LOG.info(
-                f"Maximum overdemand: {np.max(excess_demand):.3f}, minimum: {np.min(excess_demand):.3f}"
+                f"Maximum overdemand: {np.max(excess_demand):.3f}, underdemand: {np.min(excess_demand):.3f}"
             )
             LOG.info(
-                f"Maximum overdemand: {np.max(excess_demand / supply) * 100:.3f}%, minimum: {np.min(excess_demand / supply) * 100:.3f}%"
+                f"Maximum overdemand: {np.max(excess_demand / self.supply) * 100:.3f}%, underdemand: {np.min(excess_demand / self.supply) * 100:.3f}%"
             )
 
             # update prices
