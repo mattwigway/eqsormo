@@ -108,7 +108,7 @@ class ClearMarket(object):
         LOG.info(
             f"Market clearing FAILED TO CONVERGE in {self.maxiter} iterations after {human_time(end_time - start_time)}."
         )
-        return True
+        return False
 
     def shares(self, price):
         budgets, feasible_alts = self.get_budgets(price)
@@ -274,7 +274,7 @@ class ClearMarket(object):
                     else:
                         if jacidx % 10 == 9:
                             LOG.info(
-                                f"computed derivative {jacidx + 1} / {len(price) - 1}"
+                                f"computed derivative {jacidx + 1} / {len(price)}"
                             )
                         jacob[:, jacidx] = jaccol
                         result_queue.task_done()
