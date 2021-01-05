@@ -41,6 +41,7 @@ FIELDS = [
     "first_stage_ascs",
     "first_stage_fit",
     "first_stage_uneq_ascs",
+    "fixed_price",
     "full_choiceidx",
     "full_chosen",
     "full_hh_hsgidx",
@@ -180,6 +181,7 @@ def load(basefile):
         max_chunk_bytes=get("max_chunk_bytes"),
         est_first_stage_ses=get("est_first_stage_ses"),
         seed=get("seed"),
+        fixed_price=get("fixed_price"),
     )
 
     for field in FIELDS:
