@@ -101,6 +101,8 @@ class ClearMarket(object):
                 self.model.price = self.to_pandas_price(
                     self.add_fixed_price(current_price)
                 )
+                end_time = time.perf_counter()
+                LOG.info(f"Market clearing converged in {i} iterations after {human_time(end_time - start_time)}")
                 return True
 
         # can only get here if maxiter is reached
