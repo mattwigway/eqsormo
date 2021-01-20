@@ -316,7 +316,7 @@ class ClearMarket(object):
             result_queue.join()
 
             assert not np.any(
-                np.diag(jacob) >= 0
+                jacob_diag >= 0
             ), "some diagonal elements of jacobian are nonnegative!"
 
             # signal threads to shut down
