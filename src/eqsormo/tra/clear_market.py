@@ -78,12 +78,10 @@ class ClearMarket(object):
             )
 
             # update prices
-            jacob = self.compute_derivatives(current_price, shares)
-            LOG.info("Inverting Jacobian")
-            jacob_inv = np.linalg.inv(jacob)
+            jacob_diag = self.compute_derivatives(current_price, shares)
 
-            # this is 7.7 from Tra's dissertation
-            price_delta_full = jacob_inv @ self.remove_fixed_price(excess_demand)
+            # this is 7.7a from Tra's dissertation
+            price_delta_full = self.remove_fixed_price(excess_demand) / jacob_diag
             current_obj_val = np.sum(excess_demand ** 2)
             while True:
                 LOG.info("computing new prices and market shares")
@@ -322,7 +320,7 @@ class ClearMarket(object):
             # signal threads to shut down
             stop_threads.set()
 
-            return jacob
+            return jacob_diag
         finally:
             # clean up
             os.remove(util_file)
