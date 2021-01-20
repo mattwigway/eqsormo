@@ -25,6 +25,7 @@ import threading
 import pandas as pd
 import os
 import time
+import multiprocessing
 from eqsormo.common.util import human_time
 
 LOG = getLogger(__name__)
@@ -57,7 +58,12 @@ class ClearMarket(object):
 
         LOG.info("Computing shares")
         shares = self.shares(current_price)
-        alpha = 1
+
+        # start with alpha 0.5 since we're ignoring the off-diagonal elements of the jacobian and thus
+        # using just the estimated derivative will always overshoot because of the IIA property - increasing
+        # the price for one property will increase the demand for all other properties. So the diagonal is only
+        # half the story of market clearing.
+        alpha = 0.5
         while self.maxiter is None or i < self.maxiter:
             # make the logs more consistent
             i += 1
@@ -102,7 +108,9 @@ class ClearMarket(object):
                     self.add_fixed_price(current_price)
                 )
                 end_time = time.perf_counter()
-                LOG.info(f"Market clearing converged in {i} iterations after {human_time(end_time - start_time)}")
+                LOG.info(
+                    f"Market clearing converged in {i} iterations after {human_time(end_time - start_time)}"
+                )
                 return True
 
         # can only get here if maxiter is reached
@@ -187,7 +195,7 @@ class ClearMarket(object):
         return pd.Series(price, index=self.model.housing_xwalk.index)
 
     def compute_derivatives(self, price, base_shares):
-        jacob = np.zeros((len(price), len(price)))
+        jacob_diag = np.zeros_like(price)
 
         budgets, feasible_alts = self.get_budgets(price)
         budget_coef = self.model.first_stage_fit.params.budget
@@ -255,35 +263,34 @@ class ClearMarket(object):
                         util_sums = np.bincount(
                             self.model.full_hhidx, weights=exp_utilities
                         )
-                        probs = exp_utilities / util_sums[self.model.full_hhidx]
-                        if self.model.weights is not None:
-                            probs *= alt_weights
-                        share_step = np.bincount(
-                            self.model.full_choiceidx, weights=probs
+                        probs = (
+                            exp_utilities[choicemask]
+                            / util_sums[self.model.full_hhidx[choicemask]]
                         )
+                        if self.model.weights is not None:
+                            probs *= alt_weights[choicemask]
+                        share_step = np.sum(probs)
                         del probs
-                        jaccol = (share_step - base_shares) / self.price_step
+                        jacelem = (share_step - base_shares[choice]) / self.price_step
 
-                        result_queue.put((jacidx, self.remove_fixed_price(jaccol)))
+                        result_queue.put((jacidx, jacelem))
                         task_queue.task_done()
 
             def consumer():
                 while not stop_threads.is_set():
                     try:
-                        jacidx, jaccol = result_queue.get(timeout=10)
+                        jacidx, jacelem = result_queue.get(timeout=10)
                     except queue.Empty:
                         continue
                     else:
                         if jacidx % 10 == 9:
-                            LOG.info(
-                                f"computed derivative {jacidx + 1} / {len(price)}"
-                            )
-                        jacob[:, jacidx] = jaccol
+                            LOG.info(f"computed derivative {jacidx + 1} / {len(price)}")
+                        jacob_diag[jacidx] = jacelem
                         result_queue.task_done()
 
             # might need something more complex here to account for the memory pressure of sorting. Even if you have
             # 16 cores, you might not have enough memory to compute 16 derivatives at once.
-            nthreads = 2
+            nthreads = multiprocessing.cpu_count()
             LOG.info(f"computing derivatives using {nthreads} threads")
 
             # start threads
