@@ -59,6 +59,8 @@ class ClearMarket(object):
         LOG.info("Computing shares using gradient descent")
         shares = self.shares(current_price)
 
+        # used in Nesterov's acceleration, see below
+        prev_price_gd = current_price
         while self.maxiter is None or i < self.maxiter:
             # make the logs more consistent
             i += 1
@@ -93,6 +95,7 @@ class ClearMarket(object):
                 if new_obj_val < current_obj_val:
                     shares = new_shares
                     current_price = new_price
+                    prev_price_gd = new_price_gd
                     break
                 else:
                     # this is kind of a backtracking line search - if moving by alpha did not move us closer to
