@@ -364,9 +364,9 @@ class ClearMarket(object):
 
         np.fill_diagonal(jacob, jac_diag)
 
-        assert np.all(np.diag(jacob) > 0), "some diagonal elements of Jacobian are non-negative!"
-        jac_neg = jacob < 0
-        np.fill_diagonal(jac_neg, True)  # ignore pos diagonal
-        assert np.all(jac_neg), "some off-diagonal elements of Jacobian are non-positive!"
+        assert np.all(np.diag(jacob) < 0), "some diagonal elements of Jacobian are non-positive!"
+        jac_pos = jacob > 0
+        np.fill_diagonal(jac_pos, True)  # ignore neg diagonal
+        assert np.all(jac_pos), "some off-diagonal elements of Jacobian are non-positive!"
 
         return jacob
