@@ -25,6 +25,7 @@ import threading
 import pandas as pd
 import os
 import time
+from eqsormo.common import nesterov
 from eqsormo.common.util import human_time
 
 LOG = getLogger(__name__)
@@ -57,7 +58,7 @@ class ClearMarket(object):
 
         LOG.info("Computing shares using gradient descent")
         shares = self.shares(current_price)
-        alpha = 1
+
         while self.maxiter is None or i < self.maxiter:
             # make the logs more consistent
             i += 1
@@ -71,10 +72,22 @@ class ClearMarket(object):
                 f"Maximum overdemand: {np.max(excess_demand / self.supply) * 100:.3f}%, underdemand: {np.min(excess_demand / self.supply) * 100:.3f}%"
             )
 
+            search_dir = self.remove_fixed_price(excess_demand)
+
             current_obj_val = np.sum(excess_demand ** 2)
             while True:
                 LOG.info("computing new prices and market shares")
-                new_price = current_price - excess_demand * alpha
+
+                # Use Nesterov's acceleration for optimal gradient descent
+                # see https://blogs.princeton.edu/imabandit/2013/04/01/acceleratedgradientdescent/
+                # start with base gradient descent - this is y_s in the blog post
+                new_price_gd = current_price - search_dir * alpha
+                # and slide a bit further - note that this is off-by-one because we use 1-based indices
+                # for the logs
+                new_price = (1 - nesterov.gamma(i)) * new_price_gd + nesterov.gamma(
+                    i - 1
+                ) * current_price
+
                 new_shares = self.shares(new_price)
                 new_obj_val = np.sum((new_shares - self.supply) ** 2)
                 if new_obj_val < current_obj_val:
@@ -95,7 +108,9 @@ class ClearMarket(object):
                     self.add_fixed_price(current_price)
                 )
                 end_time = time.perf_counter()
-                LOG.info(f"Market clearing converged in {i} iterations after {human_time(end_time - start_time)}")
+                LOG.info(
+                    f"Market clearing converged in {i} iterations after {human_time(end_time - start_time)}"
+                )
                 return True
 
         # can only get here if maxiter is reached
