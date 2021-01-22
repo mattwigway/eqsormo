@@ -55,7 +55,7 @@ class ClearMarket(object):
         i = 0
         current_price = self.remove_fixed_price(self.price)
 
-        LOG.info("Computing shares")
+        LOG.info("Computing shares using gradient descent")
         shares = self.shares(current_price)
         alpha = 1
         while self.maxiter is None or i < self.maxiter:
@@ -71,17 +71,10 @@ class ClearMarket(object):
                 f"Maximum overdemand: {np.max(excess_demand / self.supply) * 100:.3f}%, underdemand: {np.min(excess_demand / self.supply) * 100:.3f}%"
             )
 
-            # update prices
-            jacob = self.compute_derivatives(current_price, shares)
-            LOG.info("Inverting Jacobian")
-            jacob_inv = np.linalg.inv(jacob)
-
-            # this is 7.7 from Tra's dissertation
-            price_delta_full = jacob_inv @ self.remove_fixed_price(excess_demand)
             current_obj_val = np.sum(excess_demand ** 2)
             while True:
                 LOG.info("computing new prices and market shares")
-                new_price = current_price - price_delta_full * alpha
+                new_price = current_price - excess_demand * alpha
                 new_shares = self.shares(new_price)
                 new_obj_val = np.sum((new_shares - self.supply) ** 2)
                 if new_obj_val < current_obj_val:
@@ -185,137 +178,3 @@ class ClearMarket(object):
         Convert a price vector _which includes the fixed price_ back to Pandas format.
         """
         return pd.Series(price, index=self.model.housing_xwalk.index)
-
-    def compute_derivatives(self, price, base_shares):
-        jacob = np.zeros((len(price), len(price)))
-
-        budgets, feasible_alts = self.get_budgets(price)
-        budget_coef = self.model.first_stage_fit.params.budget
-        base_exp_utilities = np.exp(self.non_price_utilities + budget_coef * budgets)
-        # exp utility of zero is out of choice set
-        base_exp_utilities[~feasible_alts] = 0
-        del budgets, feasible_alts
-
-        if not np.all(np.isfinite(base_exp_utilities)):
-            raise FloatingPointError("Not all exp(utilities) are finite (scaling?)")
-
-        budget_step, feasible_alts_step = self.get_budgets(price + self.price_step)
-        budget_coef = self.model.first_stage_fit.params.budget
-        step_exp_utilities = np.exp(
-            self.non_price_utilities + budget_coef * budget_step
-        )
-        # exp utility of zero is out of choice set
-        step_exp_utilities[~feasible_alts_step] = 0
-        del budget_step, feasible_alts_step
-
-        if not np.all(np.isfinite(step_exp_utilities)):
-            raise FloatingPointError(
-                "Not all exp(step_utilities) are finite (scaling?)"
-            )
-
-        # memmap the base utilities so we can use copy-on-write
-        fh, util_file = tempfile.mkstemp(prefix="eqsormo_mmap_", suffix=".bin")
-        os.close(fh)
-        try:
-            mm = np.memmap(
-                util_file, dtype="float64", mode="w+", shape=base_exp_utilities.shape
-            )
-            mm[:] = base_exp_utilities[:]
-            mm.flush()
-
-            # cache weights
-            if self.model.weights is not None:
-                alt_weights = self.model.weights.loc[
-                    self.model.hh_xwalk.index
-                ].to_numpy()[self.model.full_hhidx]
-
-            task_queue = queue.Queue()
-            result_queue = queue.Queue()
-            stop_threads = threading.Event()
-
-            def worker():
-                while not stop_threads.is_set():
-                    try:
-                        jacidx, choice = task_queue.get(timeout=10)
-                    except queue.Empty:
-                        continue  # return to top of loop to check for stop_threads event
-                    else:
-                        exp_utilities = np.memmap(
-                            util_file,
-                            dtype="float64",
-                            mode="c",
-                            shape=step_exp_utilities.shape,
-                        )
-                        # save memory by just saving indices, not full bool array
-                        # in the model in my dissertation, there are ~1000 choices, so this will be 1/1000 of the indices
-                        # since an int is 32 bytes (or maybe 64 since numpy arrays can be big), and a bool I believe takes up
-                        # an entire byte, we come out ahead b/c 1/1000 * 32 < 8
-                        choicemask = np.nonzero(self.model.full_choiceidx == choice)
-                        exp_utilities[choicemask] = step_exp_utilities[choicemask]
-                        util_sums = np.bincount(
-                            self.model.full_hhidx, weights=exp_utilities
-                        )
-                        probs = exp_utilities / util_sums[self.model.full_hhidx]
-                        if self.model.weights is not None:
-                            probs *= alt_weights
-                        share_step = np.bincount(
-                            self.model.full_choiceidx, weights=probs
-                        )
-                        del probs
-                        jaccol = (share_step - base_shares) / self.price_step
-
-                        result_queue.put((jacidx, self.remove_fixed_price(jaccol)))
-                        task_queue.task_done()
-
-            def consumer():
-                while not stop_threads.is_set():
-                    try:
-                        jacidx, jaccol = result_queue.get(timeout=10)
-                    except queue.Empty:
-                        continue
-                    else:
-                        if jacidx % 10 == 9:
-                            LOG.info(
-                                f"computed derivative {jacidx + 1} / {len(price)}"
-                            )
-                        jacob[:, jacidx] = jaccol
-                        result_queue.task_done()
-
-            # might need something more complex here to account for the memory pressure of sorting. Even if you have
-            # 16 cores, you might not have enough memory to compute 16 derivatives at once.
-            nthreads = 2
-            LOG.info(f"computing derivatives using {nthreads} threads")
-
-            # start threads
-            for i in range(nthreads):
-                threading.Thread(target=worker, daemon=False).start()
-
-            # consumer thread
-            threading.Thread(target=consumer, daemon=False).start()
-
-            # fill queue
-            # note that jacidx is the index in the Jacobian, which is not the same as choice which is the housing choice
-            # b/c one housing choice is skipped in the Jacobian
-            for jacidx, choice in enumerate(
-                np.r_[
-                    0 : self.fixed_price_index,
-                    self.fixed_price_index + 1 : len(self.price),
-                ]
-            ):
-                task_queue.put((jacidx, choice))
-
-            # await completion
-            task_queue.join()
-            result_queue.join()
-
-            assert not np.any(
-                np.diag(jacob) >= 0
-            ), "some diagonal elements of jacobian are nonnegative!"
-
-            # signal threads to shut down
-            stop_threads.set()
-
-            return jacob
-        finally:
-            # clean up
-            os.remove(util_file)
