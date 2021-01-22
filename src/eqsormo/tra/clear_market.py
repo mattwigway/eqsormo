@@ -61,6 +61,7 @@ class ClearMarket(object):
 
         # used in Nesterov's acceleration, see below
         prev_price_gd = current_price
+        alpha = 1
         while self.maxiter is None or i < self.maxiter:
             # make the logs more consistent
             i += 1
