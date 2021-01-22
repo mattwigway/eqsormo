@@ -254,7 +254,7 @@ class ClearMarket(object):
                         exp_utilities = np.memmap(
                             util_file,
                             dtype="float64",
-                            mode="c",
+                            mode="c",  # copy on write - keep our modifications private
                             shape=step_exp_utilities.shape,
                         )
                         # save memory by just saving indices, not full bool array
@@ -352,11 +352,21 @@ class ClearMarket(object):
 
         jacob = np.zeros((len(jac_diag), len(jac_diag)))
         
+        # remove fixed price from market shares, not a part of Jacobian
         mkt_shares_no_fixed = self.remove_fixed_price(mkt_shares)
+        # put mkt shares on a 0-1 scale, but keeping in mind that the fixed price option still
+        # uses some market share
+        mkt_shares_no_fixed /= np.sum(mkt_shares)
 
         for i in range(len(jac_diag)):
             # There might be a way to do this faster, without a loop
             jacob[i,:] = -jac_diag[i] * mkt_shares_no_fixed / (1 - mkt_shares_no_fixed[i])
 
         np.fill_diagonal(jacob, jac_diag)
+
+        assert np.all(np.diag(jacob) > 0), "some diagonal elements of Jacobian are non-negative!"
+        jac_neg = jacob < 0
+        np.fill_diagonal(jac_neg, True)  # ignore pos diagonal
+        assert np.all(jac_neg), "some off-diagonal elements of Jacobian are non-positive!"
+
         return jacob
