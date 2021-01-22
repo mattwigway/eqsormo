@@ -59,11 +59,7 @@ class ClearMarket(object):
         LOG.info("Computing shares")
         shares = self.shares(current_price)
 
-        # start with alpha 0.5 since we're ignoring the off-diagonal elements of the jacobian and thus
-        # using just the estimated derivative will always overshoot because of the IIA property - increasing
-        # the price for one property will increase the demand for all other properties. So the diagonal is only
-        # half the story of market clearing.
-        alpha = 0.5
+        alpha = 1
         while self.maxiter is None or i < self.maxiter:
             # make the logs more consistent
             i += 1
