@@ -358,5 +358,5 @@ class ClearMarket(object):
             # There might be a way to do this faster, without a loop
             jacob[i,:] = -jac_diag[i] * mkt_shares_no_fixed / (1 - mkt_shares_no_fixed[i])
 
-        np.fill_diagonal(jacob, jacob_diag)
+        np.fill_diagonal(jacob, jac_diag)
         return jacob
