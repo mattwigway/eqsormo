@@ -80,8 +80,13 @@ class ClearMarket(object):
             # update prices
             jacob_diag = self.compute_derivatives(current_price, shares)
 
-            # this is 7.7a from Tra's dissertation
-            price_delta_full = self.remove_fixed_price(excess_demand) / jacob_diag
+            LOG.info("Computing full Jacobian from diagonal")
+            jacob = self.full_jacobian_from_diagonal(jacob_diag, shares)
+            LOG.info("Inverting Jacobian")
+            jacob_inv = np.linalg.inv(jacob)
+
+            # this is 7.7 from Tra's dissertation
+            price_delta_full = price_delta_full = jacob_inv @ self.remove_fixed_price(excess_demand)
             current_obj_val = np.sum(excess_demand ** 2)
             while True:
                 LOG.info("computing new prices and market shares")
@@ -324,3 +329,34 @@ class ClearMarket(object):
         finally:
             # clean up
             os.remove(util_file)
+
+    def full_jacobian_from_diagonal (self, jac_diag, mkt_shares):
+        """
+        Because of the independence of irrelevant alternatives property of the multinomial logit model used to
+        forecast demand, it is possible to derive the full Jacobian matrix for the demand system from the diagonal
+        of the Jacobian. Numerically approximating the diagonal of the Jacobian takes about ten minutes for a full
+        Southern California model, whereas approximating the full Jacobian takes about two hours. Computing the
+        full Jacobian from the diagonal takes a negligible amount of time (milliseconds). However, using the full
+        Jacobian makes the model converge _much_ faster than using just the diagonal, which Tra (2007) proposed to
+        ease computation. However, because of this nifty property of the MNL model, we can have our cake and eat it
+        too---get the per-iteration performance of the diagonal Jacobian, with the attractive convergence properties
+        of using the full Jacobian.
+
+        So here's how it works: in a discrete choice model, when demand for a particular alternative changes by x, the sum of demand for all other
+        alternatives must change by -x (to keep all choice probabilities summing to 1 within each decisionmaking unit).
+        However, the independence of irrelevant alternatives properties of the MNL makes a stronger assertion: when demand for
+        a particular alternative changes by, the demand for all other alternatives change _in proportion to their market share_.
+        Thus, the off-diagonal elements of the Jacobian are simply J[j,i] = -J[i,i] * S[j] / (1 - S[i]), where J is the
+        Jacobian and S is the market share.
+        """
+
+        jacob = np.zeros((len(jac_diag), len(jac_diag)))
+        
+        mkt_shares_no_fixed = self.remove_fixed_price(mkt_shares)
+
+        for i in range(len(jac_diag)):
+            # There might be a way to do this faster, without a loop
+            jacob[i,:] = -jac_diag[i] * mkt_shares_no_fixed / (1 - mkt_shares_no_fixed[i])
+
+        np.fill_diagonal(jacob, jacob_diag)
+        return jacob
