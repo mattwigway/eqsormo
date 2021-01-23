@@ -61,7 +61,7 @@ class ClearMarket(object):
 
         # used in Nesterov's acceleration, see below
         prev_price_gd = current_price
-        alpha = 1
+        alpha_inv = 1
         while self.maxiter is None or i < self.maxiter:
             # make the logs more consistent
             i += 1
@@ -84,12 +84,13 @@ class ClearMarket(object):
                 # Use Nesterov's acceleration for optimal gradient descent
                 # see https://blogs.princeton.edu/imabandit/2013/04/01/acceleratedgradientdescent/
                 # start with base gradient descent - this is y_s in the blog post
-                new_price_gd = current_price + search_dir * alpha
+                new_price_gd = current_price + search_dir * (1 / alpha_inv)
                 # and slide a bit further - note that this is off-by-one because we use 1-based indices
                 # for the logs
-                new_price = (1 - nesterov.gamma(i)) * new_price_gd + nesterov.gamma(
-                    i - 1
-                ) * current_price
+                # new_price = (1 - nesterov.gamma(i)) * new_price_gd + nesterov.gamma(
+                #     i - 1
+                # ) * prev_price_gd
+                new_price = new_price_gd
 
                 new_shares = self.shares(new_price)
                 new_obj_val = np.sum((new_shares - self.supply) ** 2)
@@ -102,9 +103,9 @@ class ClearMarket(object):
                     # this is kind of a backtracking line search - if moving by alpha did not move us closer to
                     # convergence, don't move as far. Thanks to Sam Zhang for the tip here.
                     LOG.info(
-                        f"moving along gradient by alpha {alpha} did not improve objective, setting alpha to {alpha / 2}"
+                        f"moving along gradient by alpha 1 / {alpha_inv} did not improve objective, setting alpha to {alpha / 2}"
                     )
-                    alpha /= 2
+                    alpha_inv *= 2
                     continue
 
             if np.allclose(shares, self.supply):
