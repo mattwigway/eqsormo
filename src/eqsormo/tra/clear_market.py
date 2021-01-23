@@ -85,9 +85,8 @@ class ClearMarket(object):
                 # see https://blogs.princeton.edu/imabandit/2013/04/01/acceleratedgradientdescent/
                 # start with base gradient descent - this is y_s in the blog post
                 new_price_gd = current_price + search_dir * (1 / alpha_inv)
-                # and slide a bit further - note that this is off-by-one because we use 1-based indices
-                # for the logs
-                gamma = nesterov.gamma(i - 1)
+                # both blog post and code use 1-based indices
+                gamma = nesterov.gamma(i)
                 new_price = (1 - gamma) * new_price_gd + gamma * prev_price_gd
                 #new_price = new_price_gd
 
@@ -102,7 +101,7 @@ class ClearMarket(object):
                     # this is kind of a backtracking line search - if moving by alpha did not move us closer to
                     # convergence, don't move as far. Thanks to Sam Zhang for the tip here.
                     LOG.info(
-                        f"moving along gradient by alpha 1 / {alpha_inv} did not improve objective, setting alpha to 1 / {alpha_inv * 2}"
+                        f"moving along gradient by alpha 1/{alpha_inv} did not improve objective, setting alpha to 1/{alpha_inv * 2}"
                     )
                     alpha_inv *= 2
                     continue
