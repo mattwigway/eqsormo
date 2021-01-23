@@ -84,7 +84,7 @@ class ClearMarket(object):
                 # Use Nesterov's acceleration for optimal gradient descent
                 # see https://blogs.princeton.edu/imabandit/2013/04/01/acceleratedgradientdescent/
                 # start with base gradient descent - this is y_s in the blog post
-                new_price_gd = current_price - search_dir * alpha
+                new_price_gd = current_price + search_dir * alpha
                 # and slide a bit further - note that this is off-by-one because we use 1-based indices
                 # for the logs
                 new_price = (1 - nesterov.gamma(i)) * new_price_gd + nesterov.gamma(
