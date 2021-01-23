@@ -87,10 +87,9 @@ class ClearMarket(object):
                 new_price_gd = current_price + search_dir * (1 / alpha_inv)
                 # and slide a bit further - note that this is off-by-one because we use 1-based indices
                 # for the logs
-                # new_price = (1 - nesterov.gamma(i)) * new_price_gd + nesterov.gamma(
-                #     i - 1
-                # ) * prev_price_gd
-                new_price = new_price_gd
+                gamma = nesterov.gamma(i - 1)
+                new_price = (1 - gamma) * new_price_gd + gamma * prev_price_gd
+                #new_price = new_price_gd
 
                 new_shares = self.shares(new_price)
                 new_obj_val = np.sum((new_shares - self.supply) ** 2)
@@ -103,7 +102,7 @@ class ClearMarket(object):
                     # this is kind of a backtracking line search - if moving by alpha did not move us closer to
                     # convergence, don't move as far. Thanks to Sam Zhang for the tip here.
                     LOG.info(
-                        f"moving along gradient by alpha 1 / {alpha_inv} did not improve objective, setting alpha to {alpha_inv / 2}"
+                        f"moving along gradient by alpha 1 / {alpha_inv} did not improve objective, setting alpha to 1 / {alpha_inv * 2}"
                     )
                     alpha_inv *= 2
                     continue
