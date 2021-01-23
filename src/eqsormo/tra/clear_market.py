@@ -103,7 +103,7 @@ class ClearMarket(object):
                     # this is kind of a backtracking line search - if moving by alpha did not move us closer to
                     # convergence, don't move as far. Thanks to Sam Zhang for the tip here.
                     LOG.info(
-                        f"moving along gradient by alpha 1 / {alpha_inv} did not improve objective, setting alpha to {alpha / 2}"
+                        f"moving along gradient by alpha 1 / {alpha_inv} did not improve objective, setting alpha to {alpha_inv / 2}"
                     )
                     alpha_inv *= 2
                     continue
