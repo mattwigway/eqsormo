@@ -103,6 +103,7 @@ class ClearMarket(object):
             def prices_and_shares_for_alpha(candidate_alpha):
                 candidate_prices = current_price - price_delta_full * candidate_alpha
                 candidate_shares = self.shares(candidate_prices)
+                return candidate_prices, candidate_shares
 
             def obj_val(candidate_alpha):
                 new_shares = prices_and_shares_for_alpha(candidate_alpha)[1]
@@ -118,7 +119,7 @@ class ClearMarket(object):
             )
             alpha = (
                 alpha_res.x
-            )  # don't actually care if it converged, as long as it moved us closed
+            )  # don't actually care if it converged, as long as it moved us closer
 
             new_price, new_shares = prices_and_shares_for_alpha(alpha)
             new_obj_val = np.sum((new_shares - self.supply) ** 2)
