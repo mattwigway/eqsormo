@@ -25,6 +25,8 @@ import threading
 import pandas as pd
 import os
 import time
+import scipy.optimize
+from functools import lru_cache
 from eqsormo.common.util import human_time
 
 LOG = getLogger(__name__)
@@ -89,23 +91,50 @@ class ClearMarket(object):
             # this is 7.7 from Tra's dissertation
             price_delta_full = jacob_inv @ self.remove_fixed_price(excess_demand)
             current_obj_val = np.sum(excess_demand ** 2)
-            while True:
-                LOG.info("computing new prices and market shares")
-                new_price = current_price - price_delta_full * alpha
-                new_shares = self.shares(new_price)
-                new_obj_val = np.sum((new_shares - self.supply) ** 2)
-                if new_obj_val < current_obj_val:
-                    shares = new_shares
-                    current_price = new_price
-                    break
-                else:
-                    # this is kind of a backtracking line search - if moving by alpha did not move us closer to
-                    # convergence, don't move as far. Thanks to Sam Zhang for the tip here.
-                    LOG.info(
-                        f"moving along gradient by alpha {alpha} did not improve objective, setting alpha to {alpha / 2}"
+
+            # run a golden section-ish search to minimize excess demand as much as possible using this set of price deltas
+            LOG.info(
+                f"Previous alpha value: {alpha}. Using Brent's method to find optimal alpha given gradient."
+            )
+
+            # hacky, but use an LRU cache here to avoid recomputing shares after optimization converges
+            @lru_cache(maxsize=10)
+            def prices_and_shares_for_alpha(candidate_alpha):
+                candidate_prices = current_price - price_delta_full * candidate_alpha
+                candidate_shares = self.shares(candidate_prices)
+
+            def obj_val(candidate_alpha):
+                new_shares = prices_and_shares_for_alpha(candidate_alpha)[1]
+                return np.sum((new_shares - self.supply) ** 2)
+
+            # Do not run many iterations here, don't spend too much time doing this
+            alpha_res = scipy.optimize.minimize_scalar(
+                obj_val,
+                bracket=(alpha, alpha * 0.9),
+                disp=True,
+                maxiter=5,
+                tol=1e-3,
+                method="brent",
+            )
+            alpha = (
+                alpha_res.x
+            )  # don't actually care if it converged, as long as it moved us closed
+
+            new_price, new_shares = prices_and_shares_for_alpha(alpha_res)
+            new_obj_val = np.sum((new_shares - self.supply) ** 2)
+
+            if not new_obj_val < current_obj_val:
+                if i <= diagonal_iterations:
+                    LOG.error(
+                        f"With optimal alpha {alpha}, objective did not improve, using full Jacobian!"
                     )
-                    alpha /= 2
+                    diagonal_iterations = -1
                     continue
+                else:
+                    raise ValueError(f"Objective did not improve with alpha {alpha}!")
+
+            current_price = new_price
+            shares = new_shares
 
             if np.allclose(shares, self.supply):
                 self.model.price = self.to_pandas_price(
@@ -118,11 +147,12 @@ class ClearMarket(object):
                 return True
 
         # can only get here if maxiter is reached
-        end_time = time.perf_counter()
-        LOG.info(
-            f"Market clearing FAILED TO CONVERGE in {self.maxiter} iterations after {human_time(end_time - start_time)}."
-        )
-        return False
+        else:
+            end_time = time.perf_counter()
+            LOG.info(
+                f"Market clearing FAILED TO CONVERGE in {self.maxiter} iterations after {human_time(end_time - start_time)}."
+            )
+            return False
 
     def shares(self, price):
         budgets, feasible_alts = self.get_budgets(price)
