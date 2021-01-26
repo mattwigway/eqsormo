@@ -27,8 +27,39 @@ import os
 import time
 from eqsormo.common import nesterov
 from eqsormo.common.util import human_time
+from eqsormo.common.parallel_split_combine import ParallelSplitCombine
 
 LOG = getLogger(__name__)
+
+
+class FindShares(ParallelSplitCombine):
+    def __init__ (self, n_alts, model,):
+        self.shares = np.zeros(n_alts)
+
+    def worker (self, task):
+        
+
+        exp_utility = np.exp(full_utilities)
+        del full_utilities, budgets
+        # force choice probability to zero for infeasible alts
+        exp_utility[~feasible_alts] = 0
+        del feasible_alts
+
+        if not np.all(np.isfinite(exp_utility)):
+            raise FloatingPointError("Not all exp(utilities) are finite (scaling?)")
+
+        expsums = np.bincount(self.model.full_hhidx, weights=exp_utility)
+        probs = exp_utility / expsums[self.model.full_hhidx]
+
+        if self.model.weights is not None:
+            probs *= self.model.weights.loc[self.model.hh_xwalk.index].to_numpy()[
+                self.model.full_hhidx
+            ]
+
+        shares = np.bincount(self.model.full_choiceidx, weights=probs)
+
+        return shares
+
 
 
 class ClearMarket(object):
