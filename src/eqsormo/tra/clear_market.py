@@ -112,9 +112,12 @@ class ClearMarket(object):
             alpha_res = scipy.optimize.minimize_scalar(
                 obj_val,
                 bracket=(alpha, alpha * 0.9),
-                disp=True,
                 maxiter=5,
                 tol=1e-3,
+                options={
+                    'disp': True,
+                    'xtol': 1e-3
+                }
                 method="brent",
             )
             alpha = (
