@@ -26,6 +26,7 @@ import pandas as pd
 import os
 import time
 import scipy.optimize
+import multiprocessing
 from functools import lru_cache
 from eqsormo.common.util import human_time
 
@@ -342,7 +343,7 @@ class ClearMarket(object):
 
             # might need something more complex here to account for the memory pressure of sorting. Even if you have
             # 16 cores, you might not have enough memory to compute 16 derivatives at once.
-            nthreads = 2
+            nthreads = multiprocessing.cpu_count()
             LOG.info(f"computing derivatives using {nthreads} threads")
 
             # start threads
