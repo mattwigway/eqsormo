@@ -117,7 +117,7 @@ class ClearMarket(object):
                 options={
                     'disp': True,
                     'xtol': 1e-3
-                }
+                },
                 method="brent",
             )
             alpha = (
