@@ -124,8 +124,10 @@ class ClearMarket(object):
                 alpha_res.x
             )  # don't actually care if it converged, as long as it moved us closed
 
-            new_price, new_shares = prices_and_shares_for_alpha(alpha_res)
+            new_price, new_shares = prices_and_shares_for_alpha(alpha)
             new_obj_val = np.sum((new_shares - self.supply) ** 2)
+
+            print(f'Found optimal alpha {alpha}')
 
             if not new_obj_val < current_obj_val:
                 if i <= diagonal_iterations:
