@@ -112,12 +112,8 @@ class ClearMarket(object):
             alpha_res = scipy.optimize.minimize_scalar(
                 obj_val,
                 bracket=(alpha, alpha * 0.9),
-                maxiter=5,
                 tol=1e-3,
-                options={
-                    'disp': True,
-                    'xtol': 1e-3
-                },
+                options={"disp": True, "maxiter": 5, "xtol": 1e-3},
                 method="brent",
             )
             alpha = (
@@ -127,7 +123,7 @@ class ClearMarket(object):
             new_price, new_shares = prices_and_shares_for_alpha(alpha)
             new_obj_val = np.sum((new_shares - self.supply) ** 2)
 
-            print(f'Found optimal alpha {alpha}')
+            print(f"Found optimal alpha {alpha}")
 
             if not new_obj_val < current_obj_val:
                 if i <= diagonal_iterations:
