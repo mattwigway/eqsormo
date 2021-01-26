@@ -43,7 +43,15 @@ class ClearMarket(object):
             model.full_hhidx
         ]
 
-    def clear_market(self):
+    def clear_market(self, diagonal_iterations=10):
+        """
+        Parameters
+        ----------
+        diagonal_iterations: int, optional
+            Number of iterations to perform with the diagonal of the Jacobian before switching to the full Jacobian.
+            The diagonal of the Jacobian is much faster to compute, but does not guarantee convergence, but generally moves in
+            the right direction. Doing the first few interations with the diagonal can significantly speed convergence.
+        """
         LOG.info("Clearing the market (everyone stand back)")
         start_time = time.perf_counter()
 
@@ -72,7 +80,9 @@ class ClearMarket(object):
             )
 
             # update prices
-            jacob = self.compute_derivatives(current_price, shares)
+            jacob = self.compute_derivatives(
+                current_price, shares, diagonal_only=i <= diagonal_iteration
+            )
             LOG.info("Inverting Jacobian")
             jacob_inv = np.linalg.inv(jacob)
 
@@ -102,7 +112,9 @@ class ClearMarket(object):
                     self.add_fixed_price(current_price)
                 )
                 end_time = time.perf_counter()
-                LOG.info(f"Market clearing converged in {i} iterations after {human_time(end_time - start_time)}")
+                LOG.info(
+                    f"Market clearing converged in {i} iterations after {human_time(end_time - start_time)}"
+                )
                 return True
 
         # can only get here if maxiter is reached
@@ -186,7 +198,10 @@ class ClearMarket(object):
         """
         return pd.Series(price, index=self.model.housing_xwalk.index)
 
-    def compute_derivatives(self, price, base_shares):
+    def compute_derivatives(self, price, base_shares, diagonal_only=False):
+        if diagonal_only:
+            LOG.info("Ignoring off-diagonal elements of Jacobian")
+
         jacob = np.zeros((len(price), len(price)))
 
         budgets, feasible_alts = self.get_budgets(price)
@@ -248,23 +263,39 @@ class ClearMarket(object):
                         )
                         # save memory by just saving indices, not full bool array
                         # in the model in my dissertation, there are ~1000 choices, so this will be 1/1000 of the indices
-                        # since an int is 32 bytes (or maybe 64 since numpy arrays can be big), and a bool I believe takes up
+                        # since an int is 32 bits (or maybe 64 since numpy arrays can be big), and a bool I believe takes up
                         # an entire byte, we come out ahead b/c 1/1000 * 32 < 8
                         choicemask = np.nonzero(self.model.full_choiceidx == choice)
                         exp_utilities[choicemask] = step_exp_utilities[choicemask]
                         util_sums = np.bincount(
                             self.model.full_hhidx, weights=exp_utilities
                         )
-                        probs = exp_utilities / util_sums[self.model.full_hhidx]
-                        if self.model.weights is not None:
-                            probs *= alt_weights
-                        share_step = np.bincount(
-                            self.model.full_choiceidx, weights=probs
-                        )
-                        del probs
-                        jaccol = (share_step - base_shares) / self.price_step
 
-                        result_queue.put((jacidx, self.remove_fixed_price(jaccol)))
+                        if diagonal_only:
+                            probs = (
+                                exp_utilities[choicemask]
+                                / util_sums[self.model.full_hhidx[choicemask]]
+                            )
+                            if self.model.weights is not None:
+                                probs *= alt_weights[choicemask]
+                            share_step = np.sum(probs)
+                            jaccol = np.zeros(len(price))
+                            jaccol[jacidx] = (
+                                share_step - base_shares[choice]
+                            ) / self.price_step
+                        else:
+                            probs = exp_utilities / util_sums[self.model.full_hhidx]
+                            if self.model.weights is not None:
+                                probs *= alt_weights
+                            share_step = np.bincount(
+                                self.model.full_choiceidx, weights=probs
+                            )
+                            del probs
+                            jaccol = self.remove_fixed_price(
+                                (share_step - base_shares) / self.price_step
+                            )
+
+                        result_queue.put((jacidx, jaccol))
                         task_queue.task_done()
 
             def consumer():
@@ -275,9 +306,7 @@ class ClearMarket(object):
                         continue
                     else:
                         if jacidx % 10 == 9:
-                            LOG.info(
-                                f"computed derivative {jacidx + 1} / {len(price)}"
-                            )
+                            LOG.info(f"computed derivative {jacidx + 1} / {len(price)}")
                         jacob[:, jacidx] = jaccol
                         result_queue.task_done()
 
