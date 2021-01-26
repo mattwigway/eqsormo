@@ -83,7 +83,7 @@ class ClearMarket(object):
 
             # update prices
             jacob = self.compute_derivatives(
-                current_price, shares, diagonal_only=i <= diagonal_iteration
+                current_price, shares, diagonal_only=i <= diagonal_iterations
             )
             LOG.info("Inverting Jacobian")
             jacob_inv = np.linalg.inv(jacob)
