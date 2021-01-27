@@ -25,6 +25,9 @@ import threading
 import pandas as pd
 import os
 import time
+import scipy.optimize
+import multiprocessing
+from functools import lru_cache
 from eqsormo.common.util import human_time
 
 LOG = getLogger(__name__)
@@ -43,7 +46,15 @@ class ClearMarket(object):
             model.full_hhidx
         ]
 
-    def clear_market(self):
+    def clear_market(self, diagonal_iterations=3):
+        """
+        Parameters
+        ----------
+        diagonal_iterations: int, optional
+            Number of iterations to perform with the diagonal of the Jacobian before switching to the full Jacobian.
+            The diagonal of the Jacobian is much faster to compute, but does not guarantee convergence, but generally moves in
+            the right direction. Doing the first few interations with the diagonal can significantly speed convergence.
+        """
         LOG.info("Clearing the market (everyone stand back)")
         start_time = time.perf_counter()
 
@@ -63,54 +74,89 @@ class ClearMarket(object):
             i += 1
             LOG.info(f"market clearing: begin iteration {i}")
             excess_demand = shares - self.supply
+            current_obj_val = np.sum(excess_demand ** 2)
+
             # since they always have to sum to 100% of hhs max will always be >= 0, and min <= 0
             LOG.info(
-                f"Maximum overdemand: {np.max(excess_demand):.3f}, underdemand: {np.min(excess_demand):.3f}"
+                f"Maximum overdemand: {np.max(excess_demand):.3f}, underdemand: {np.min(excess_demand):.3f}, SSE: {current_obj_val}"
             )
             LOG.info(
                 f"Maximum overdemand: {np.max(excess_demand / self.supply) * 100:.3f}%, underdemand: {np.min(excess_demand / self.supply) * 100:.3f}%"
             )
 
             # update prices
-            jacob = self.compute_derivatives(current_price, shares)
+            jacob = self.compute_derivatives(
+                current_price, shares, diagonal_only=i <= diagonal_iterations
+            )
             LOG.info("Inverting Jacobian")
             jacob_inv = np.linalg.inv(jacob)
 
             # this is 7.7 from Tra's dissertation
             price_delta_full = jacob_inv @ self.remove_fixed_price(excess_demand)
-            current_obj_val = np.sum(excess_demand ** 2)
-            while True:
-                LOG.info("computing new prices and market shares")
-                new_price = current_price - price_delta_full * alpha
-                new_shares = self.shares(new_price)
-                new_obj_val = np.sum((new_shares - self.supply) ** 2)
-                if new_obj_val < current_obj_val:
-                    shares = new_shares
-                    current_price = new_price
-                    break
-                else:
-                    # this is kind of a backtracking line search - if moving by alpha did not move us closer to
-                    # convergence, don't move as far. Thanks to Sam Zhang for the tip here.
-                    LOG.info(
-                        f"moving along gradient by alpha {alpha} did not improve objective, setting alpha to {alpha / 2}"
+
+            # run a golden section-ish search to minimize excess demand as much as possible using this set of price deltas
+            LOG.info(
+                f"Previous alpha value: {alpha}. Using Brent's method to find optimal alpha given gradient."
+            )
+
+            # hacky, but use an LRU cache here to avoid recomputing shares after optimization converges
+            @lru_cache(maxsize=10)
+            def prices_and_shares_for_alpha(candidate_alpha):
+                candidate_prices = current_price - price_delta_full * candidate_alpha
+                candidate_shares = self.shares(candidate_prices)
+                return candidate_prices, candidate_shares
+
+            def obj_val(candidate_alpha):
+                new_shares = prices_and_shares_for_alpha(candidate_alpha)[1]
+                return np.sum((new_shares - self.supply) ** 2)
+
+            # Do not run many iterations here, don't spend too much time doing this
+            alpha_res = scipy.optimize.minimize_scalar(
+                obj_val,
+                bracket=(alpha, alpha * 0.9),
+                tol=1e-3,
+                options={"disp": True, "maxiter": 5, "xtol": 1e-3},
+                method="brent",
+            )
+            alpha = (
+                alpha_res.x
+            )  # don't actually care if it converged, as long as it moved us closer
+
+            new_price, new_shares = prices_and_shares_for_alpha(alpha)
+            new_obj_val = np.sum((new_shares - self.supply) ** 2)
+
+            LOG.info(f"Found optimal alpha {alpha}, moves SSE from {current_obj_val} to {new_obj_val}")
+
+            if not new_obj_val < current_obj_val:
+                if i <= diagonal_iterations:
+                    LOG.error(
+                        f"With optimal alpha {alpha}, objective did not improve, using full Jacobian!"
                     )
-                    alpha /= 2
+                    diagonal_iterations = -1
                     continue
+                else:
+                    raise ValueError(f"Objective did not improve with alpha {alpha}!")
+
+            current_price = new_price
+            shares = new_shares
 
             if np.allclose(shares, self.supply):
                 self.model.price = self.to_pandas_price(
                     self.add_fixed_price(current_price)
                 )
                 end_time = time.perf_counter()
-                LOG.info(f"Market clearing converged in {i} iterations after {human_time(end_time - start_time)}")
+                LOG.info(
+                    f"Market clearing converged in {i} iterations after {human_time(end_time - start_time)}"
+                )
                 return True
 
         # can only get here if maxiter is reached
-        end_time = time.perf_counter()
-        LOG.info(
-            f"Market clearing FAILED TO CONVERGE in {self.maxiter} iterations after {human_time(end_time - start_time)}."
-        )
-        return False
+        else:
+            end_time = time.perf_counter()
+            LOG.info(
+                f"Market clearing FAILED TO CONVERGE in {self.maxiter} iterations after {human_time(end_time - start_time)}."
+            )
+            return False
 
     def shares(self, price):
         budgets, feasible_alts = self.get_budgets(price)
@@ -186,7 +232,10 @@ class ClearMarket(object):
         """
         return pd.Series(price, index=self.model.housing_xwalk.index)
 
-    def compute_derivatives(self, price, base_shares):
+    def compute_derivatives(self, price, base_shares, diagonal_only=False):
+        if diagonal_only:
+            LOG.info("Ignoring off-diagonal elements of Jacobian")
+
         jacob = np.zeros((len(price), len(price)))
 
         budgets, feasible_alts = self.get_budgets(price)
@@ -248,23 +297,39 @@ class ClearMarket(object):
                         )
                         # save memory by just saving indices, not full bool array
                         # in the model in my dissertation, there are ~1000 choices, so this will be 1/1000 of the indices
-                        # since an int is 32 bytes (or maybe 64 since numpy arrays can be big), and a bool I believe takes up
+                        # since an int is 32 bits (or maybe 64 since numpy arrays can be big), and a bool I believe takes up
                         # an entire byte, we come out ahead b/c 1/1000 * 32 < 8
                         choicemask = np.nonzero(self.model.full_choiceidx == choice)
                         exp_utilities[choicemask] = step_exp_utilities[choicemask]
                         util_sums = np.bincount(
                             self.model.full_hhidx, weights=exp_utilities
                         )
-                        probs = exp_utilities / util_sums[self.model.full_hhidx]
-                        if self.model.weights is not None:
-                            probs *= alt_weights
-                        share_step = np.bincount(
-                            self.model.full_choiceidx, weights=probs
-                        )
-                        del probs
-                        jaccol = (share_step - base_shares) / self.price_step
 
-                        result_queue.put((jacidx, self.remove_fixed_price(jaccol)))
+                        if diagonal_only:
+                            probs = (
+                                exp_utilities[choicemask]
+                                / util_sums[self.model.full_hhidx[choicemask]]
+                            )
+                            if self.model.weights is not None:
+                                probs *= alt_weights[choicemask]
+                            share_step = np.sum(probs)
+                            jaccol = np.zeros(len(price))
+                            jaccol[jacidx] = (
+                                share_step - base_shares[choice]
+                            ) / self.price_step
+                        else:
+                            probs = exp_utilities / util_sums[self.model.full_hhidx]
+                            if self.model.weights is not None:
+                                probs *= alt_weights
+                            share_step = np.bincount(
+                                self.model.full_choiceidx, weights=probs
+                            )
+                            del probs
+                            jaccol = self.remove_fixed_price(
+                                (share_step - base_shares) / self.price_step
+                            )
+
+                        result_queue.put((jacidx, jaccol))
                         task_queue.task_done()
 
             def consumer():
@@ -275,15 +340,13 @@ class ClearMarket(object):
                         continue
                     else:
                         if jacidx % 10 == 9:
-                            LOG.info(
-                                f"computed derivative {jacidx + 1} / {len(price)}"
-                            )
+                            LOG.info(f"computed derivative {jacidx + 1} / {len(price)}")
                         jacob[:, jacidx] = jaccol
                         result_queue.task_done()
 
             # might need something more complex here to account for the memory pressure of sorting. Even if you have
             # 16 cores, you might not have enough memory to compute 16 derivatives at once.
-            nthreads = 2
+            nthreads = multiprocessing.cpu_count() if diagonal_only else 2
             LOG.info(f"computing derivatives using {nthreads} threads")
 
             # start threads
