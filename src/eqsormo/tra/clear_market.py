@@ -74,9 +74,11 @@ class ClearMarket(object):
             i += 1
             LOG.info(f"market clearing: begin iteration {i}")
             excess_demand = shares - self.supply
+            current_obj_val = np.sum(excess_demand ** 2)
+
             # since they always have to sum to 100% of hhs max will always be >= 0, and min <= 0
             LOG.info(
-                f"Maximum overdemand: {np.max(excess_demand):.3f}, underdemand: {np.min(excess_demand):.3f}"
+                f"Maximum overdemand: {np.max(excess_demand):.3f}, underdemand: {np.min(excess_demand):.3f}, SSE: {current_obj_val}"
             )
             LOG.info(
                 f"Maximum overdemand: {np.max(excess_demand / self.supply) * 100:.3f}%, underdemand: {np.min(excess_demand / self.supply) * 100:.3f}%"
@@ -91,7 +93,6 @@ class ClearMarket(object):
 
             # this is 7.7 from Tra's dissertation
             price_delta_full = jacob_inv @ self.remove_fixed_price(excess_demand)
-            current_obj_val = np.sum(excess_demand ** 2)
 
             # run a golden section-ish search to minimize excess demand as much as possible using this set of price deltas
             LOG.info(
@@ -124,7 +125,7 @@ class ClearMarket(object):
             new_price, new_shares = prices_and_shares_for_alpha(alpha)
             new_obj_val = np.sum((new_shares - self.supply) ** 2)
 
-            LOG.info(f"Found optimal alpha {alpha}")
+            LOG.info(f"Found optimal alpha {alpha}, moves SSE from {current_obj_val} to {new_obj_val}")
 
             if not new_obj_val < current_obj_val:
                 if i <= diagonal_iterations:
