@@ -46,7 +46,7 @@ class ClearMarket(object):
             model.full_hhidx
         ]
 
-    def clear_market(self, diagonal_iterations=10):
+    def clear_market(self, diagonal_iterations=3):
         """
         Parameters
         ----------
