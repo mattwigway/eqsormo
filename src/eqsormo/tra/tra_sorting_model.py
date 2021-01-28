@@ -22,14 +22,19 @@ import statsmodels.api as sm
 import pandas as pd
 import numpy as np
 import datetime
-import multiprocessing
 import threading
 import queue
 
 from . import price_income
 from .clear_market import ClearMarket
 from eqsormo.common import BaseSortingModel, MNLFullASC
-from eqsormo.common.util import human_bytes, human_time, human_shape, ConvergenceError
+from eqsormo.common.util import (
+    human_bytes,
+    human_time,
+    human_shape,
+    max_thread_count,
+    ConvergenceError,
+)
 from eqsormo.common.compute_ascs import compute_ascs
 import eqsormo
 from . import save_load
@@ -682,7 +687,7 @@ class TraSortingModel(BaseSortingModel):
             f"Materializing full alternatives using {nchunks} chunks of {chunk_rows} rows each ({human_bytes(chunk_rows * len(self.alternatives_colnames) * 8)} each)"
         )
 
-        nthreads = multiprocessing.cpu_count()
+        nthreads = max_thread_count()
 
         task_queue = queue.Queue()
         result_queue = queue.Queue()

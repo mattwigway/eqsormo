@@ -26,9 +26,8 @@ import pandas as pd
 import os
 import time
 import scipy.optimize
-import multiprocessing
 from functools import lru_cache
-from eqsormo.common.util import human_time
+from eqsormo.common.util import human_time, max_thread_count
 
 LOG = getLogger(__name__)
 
@@ -125,7 +124,9 @@ class ClearMarket(object):
             new_price, new_shares = prices_and_shares_for_alpha(alpha)
             new_obj_val = np.sum((new_shares - self.supply) ** 2)
 
-            LOG.info(f"Found optimal alpha {alpha}, moves SSE from {current_obj_val} to {new_obj_val}")
+            LOG.info(
+                f"Found optimal alpha {alpha}, moves SSE from {current_obj_val} to {new_obj_val}"
+            )
 
             if not new_obj_val < current_obj_val:
                 if i <= diagonal_iterations:
@@ -346,7 +347,7 @@ class ClearMarket(object):
 
             # might need something more complex here to account for the memory pressure of sorting. Even if you have
             # 16 cores, you might not have enough memory to compute 16 derivatives at once.
-            nthreads = multiprocessing.cpu_count() if diagonal_only else 2
+            nthreads = max_thread_count() if diagonal_only else 2
             LOG.info(f"computing derivatives using {nthreads} threads")
 
             # start threads

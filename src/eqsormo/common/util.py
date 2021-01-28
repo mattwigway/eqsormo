@@ -12,6 +12,9 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 
+from os import environ
+import multiprocessing
+
 byte_scalars = {"TB": 1e12, "GB": 1e9, "MB": 1e6, "KB": 1e3}
 
 
@@ -41,6 +44,13 @@ def human_time(seconds):
 def human_shape(shape):
     "Shape of a numpy array in human-readable format, e.g. 2x2"
     return "x".join(map(str, shape))
+
+
+def max_thread_count():
+    if "MAX_THREADS" in os.environ:
+        return int(os.environ["MAX_THREADS"])
+    else:
+        return multiprocessing.cpu_count()
 
 
 class ConvergenceError(Exception):

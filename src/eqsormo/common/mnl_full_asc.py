@@ -21,11 +21,10 @@ import time
 from logging import getLogger
 import pandas as pd
 import threading
-import multiprocessing
 import queue
 
 from .compute_ascs import compute_ascs
-from .util import human_time
+from .util import human_time, max_thread_count
 
 LOG = getLogger(__name__)
 
@@ -284,7 +283,7 @@ class MNLFullASC(object):
         elif isinstance(step_size, float):
             step_size = np.full(len(params), step_size)
 
-        nthreads = multiprocessing.cpu_count()
+        nthreads = max_thread_count()
         LOG.info(f"computing Hessian using {nthreads} threads")
         # we need the outer product to scale the finite diff appx below
         prod = np.outer(step_size, step_size)
