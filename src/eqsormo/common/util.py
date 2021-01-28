@@ -47,7 +47,7 @@ def human_shape(shape):
 
 
 def max_thread_count():
-    if "MAX_THREADS" in os.environ:
+    if "MAX_THREADS" in environ:
         return int(environ["MAX_THREADS"])
     else:
         return multiprocessing.cpu_count()
