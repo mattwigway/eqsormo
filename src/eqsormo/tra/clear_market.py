@@ -247,7 +247,7 @@ class ClearMarket(object):
             f"eqsormo-price-checkpoint-{self.checkpoint_uuid}-iter-{iteration}.parquet"
         )
         LOG.info(f"Saving price checkpoint to {fname}")
-        self.to_pandas_price(self.add_fixed_price(price)).to_parquet(fname)
+        pd.DataFrame(self.to_pandas_price(self.add_fixed_price(price))).to_parquet(fname)
 
     def compute_derivatives(self, price, base_shares, diagonal_only=False):
         if diagonal_only:
