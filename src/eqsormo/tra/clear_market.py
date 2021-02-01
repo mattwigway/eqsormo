@@ -24,6 +24,7 @@ import queue
 import threading
 import pandas as pd
 import os
+import uuid
 import time
 import scipy.optimize
 from functools import lru_cache
@@ -44,6 +45,7 @@ class ClearMarket(object):
         self.alt_income = model.income.loc[model.hh_xwalk.index].to_numpy()[
             model.full_hhidx
         ]
+        self.checkpoint_uuid = uuid.uuid4().hex
 
     def clear_market(self, diagonal_iterations=3):
         """
@@ -55,6 +57,7 @@ class ClearMarket(object):
             the right direction. Doing the first few interations with the diagonal can significantly speed convergence.
         """
         LOG.info("Clearing the market (everyone stand back)")
+        LOG.info("")
         start_time = time.perf_counter()
 
         if self.model.endogenous_variable_defs is not None:
@@ -140,6 +143,8 @@ class ClearMarket(object):
 
             current_price = new_price
             shares = new_shares
+
+            self.save_price_checkpoint(current_price, i)
 
             if np.allclose(shares, self.supply):
                 self.model.price = self.to_pandas_price(
@@ -232,6 +237,17 @@ class ClearMarket(object):
         Convert a price vector _which includes the fixed price_ back to Pandas format.
         """
         return pd.Series(price, index=self.model.housing_xwalk.index)
+
+    def save_price_checkpoint(self, price, iteration):
+        """
+        Save a checkpoint of a price vector _which does not include a fixed prices_, so we can restart computation
+        if the model crashes.
+        """
+        fname = (
+            f"eqsormo-price-checkpoint-{self.checkpoint_uuid}-iter-{iteration}.parquet"
+        )
+        LOG.info(f"Saving price checkpoint to {fname}")
+        self.to_pandas_price(self.add_fixed_price(price)).to_parquet(fname)
 
     def compute_derivatives(self, price, base_shares, diagonal_only=False):
         if diagonal_only:
